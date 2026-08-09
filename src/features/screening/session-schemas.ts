@@ -92,6 +92,8 @@ export const ScreeningResultSchema = z.object({
   uncertainties: z.array(z.string()).default([]).transform(clipList(3, 24)),
 })
 export type ScreeningResultValue = z.infer<typeof ScreeningResultSchema>
+/** Result minus the advisory label — the write unit (batch correlates by metadata key). */
+export type ScreeningResultCore = Omit<ScreeningResultValue, 'candidate'>
 
 /** One chunked call's output (≤SCREEN_CHUNK_SIZE results; over-production is sliced). */
 export const ScreeningChunkOutput = z.object({
@@ -234,4 +236,57 @@ export function groupResultsForDisplay(
 /** 409 rule (05 §4.10): one ACTIVE session per job. */
 export function isActiveSessionStatus(status: string): boolean {
   return status === 'queued' || status === 'processing'
+}
+
+// ── Stage 5.4 — async processing guards (17 §9) ──────────────────────────────
+
+/** Batch accelerator kicks in at this pool size (17 §9.2). */
+export const BATCH_POOL_THRESHOLD = 50
+/** Processing lease: a crashed run is reclaimed after this window. */
+export const CLAIM_EXPIRY_MS = 10 * 60_000
+/** quota_limited auto-resume cooldown ("next tick" + jitter buffer, 17 §9.2). */
+export const QUOTA_COOLDOWN_MS = 2 * 60_000
+
+/**
+ * Single-processor guard (17 §9.1): may an advancer (after()-kick, cron worker,
+ * advance-on-view) CAS-claim this session now? Pure predicate, JS-side of the
+ * compare-and-swap in process.ts.
+ */
+export function isLeaseClaimable(status: string, lockedAt: string | null, nowMs: number): boolean {
+  if (!lockedAt) return status !== 'cancelled' && status !== 'completed' && status !== 'failed'
+  const lockedMs = Date.parse(lockedAt)
+  if (Number.isNaN(lockedMs)) return true
+  if (status === 'quota_limited') return lockedMs + QUOTA_COOLDOWN_MS <= nowMs
+  if (status === 'queued' || status === 'processing') return lockedMs + CLAIM_EXPIRY_MS <= nowMs
+  return false
+}
+
+/** Retry re-queues failed rows and revives a terminal session (05 §4.10). */
+export function canRetrySession(status: string): boolean {
+  return status === 'completed' || status === 'failed' || status === 'cancelled'
+}
+
+/** Cancel only ever touches sessions in flight (05 §4.10). */
+export function canCancelSession(status: string): boolean {
+  return status === 'queued' || status === 'processing' || status === 'quota_limited'
+}
+
+/** Should this pending volume accelerate via Gemini Batch? (17 §9.2) */
+export function shouldUpgradeToBatch(engine: string, poolSize: number): boolean {
+  return engine !== 'batch' && poolSize >= BATCH_POOL_THRESHOLD
+}
+
+/** Gemini responseSchema for ONE candidate's result (batch per-candidate items, 17 §9.2). */
+export const SCREENING_RESULT_JSON_SCHEMA: Record<string, unknown> = {
+  type: 'OBJECT',
+  properties: {
+    candidate: { type: 'STRING' },
+    category: { type: 'STRING', enum: [...RESULT_CATEGORIES] },
+    rank: { type: 'NUMBER', nullable: true },
+    score: { type: 'NUMBER', nullable: true },
+    reasons: { type: 'ARRAY', items: { type: 'STRING' } },
+    evidence: { type: 'ARRAY', items: { type: 'STRING' } },
+    uncertainties: { type: 'ARRAY', items: { type: 'STRING' } },
+  },
+  required: ['candidate', 'category'],
 }

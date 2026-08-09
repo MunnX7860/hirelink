@@ -92,6 +92,31 @@ export async function resolveScopeAiOrNull(
   return resolveAiOrNull(client, refForScope(scope))
 }
 
+/** Raw-key resolution for the BATCH path (17 §9.2 — batch.ts speaks plain REST). */
+export interface ScopeAiKey {
+  integrationId: string
+  apiKey: string
+  model: string
+}
+
+export async function resolveScopeAiKey(client: Client, scope: Scope): Promise<ScopeAiKey | null> {
+  const resolved = await getScopedIntegration(client, refForScope(scope), 'ai')
+  const row = resolved?.row ?? null
+  if (!row || row.status !== 'active' || !row.credentials_encrypted) return null
+  try {
+    const apiKey = decryptSecret(row.credentials_encrypted)
+    const config = row.config as { model?: string }
+    return {
+      integrationId: row.id,
+      apiKey,
+      model: config.model ?? 'gemini-2.0-flash',
+    }
+  } catch (err) {
+    logger.error('ai key decrypt failed', { owner_id: scope.ownerId, ...errorSummary(err) })
+    return null
+  }
+}
+
 /**
  * Result-union AI call for quota-sensitive engines (17 §9.3) — D4-style: never
  * throws; classifies failures so the caller can map them to row/session states.

@@ -4,10 +4,13 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { AppError, ErrorCode } from '@/lib/errors'
 import { logger, errorSummary } from '@/lib/logger'
 import { PROMPT_VERSIONS } from '@/lib/ai/prompts'
+import { makeBatchClient } from '@/lib/ai/batch'
 import { getJob } from '@/features/jobs/server'
-import { resolveScopeAiOrNull } from '@/features/ai/server'
+import { resolveScopeAiKey, resolveScopeAiOrNull } from '@/features/ai/server'
 import type { Scope } from '@/features/orgs/scope'
 import {
+  canCancelSession,
+  canRetrySession,
   groupResultsForDisplay,
   isActiveSessionStatus,
   poolApplicationsFilter,
@@ -347,6 +350,8 @@ export interface SessionJobContext {
     instruction: string
     max_results: number
     status: string
+    engine: string
+    engine_ref: string | null
     processed: number
     failed: number
     pool_size: number
@@ -368,7 +373,7 @@ export async function loadSessionJobContext(
   const { data, error } = await client
     .from('ai_screening_sessions')
     .select(
-      'id, job_id, owner_id, organization_id, instruction, max_results, status, processed, failed, pool_size, job:jobs!inner(id, title, description, screening_config, owner_id, organization_id)',
+      'id, job_id, owner_id, organization_id, instruction, max_results, status, engine, engine_ref, processed, failed, pool_size, job:jobs!inner(id, title, description, screening_config, owner_id, organization_id)',
     )
     .eq('id', sessionId)
     .maybeSingle()
@@ -378,4 +383,145 @@ export async function loadSessionJobContext(
   }
   if (!data) return null
   return data as unknown as SessionJobContext
+}
+
+// ── Retry + cancel (POST …/:id/retry|cancel — docs/05 §4.10, 17 §9.3) ────────
+
+interface ScopedSessionRow {
+  id: string
+  owner_id: string
+  status: string
+  failed: number
+  engine: string
+  engine_ref: string | null
+}
+
+/** Scope-checked loader for mutation endpoints (docs/11 §1 — 404 semantics). */
+async function loadScopedSession(
+  client: Client,
+  scope: Scope,
+  sessionId: string,
+): Promise<ScopedSessionRow | null> {
+  const { data, error } = await client
+    .from('ai_screening_sessions')
+    .select('id, owner_id, status, failed, engine, engine_ref, job:jobs!inner(id)')
+    .eq('id', sessionId)
+    .maybeSingle()
+  if (error) throw new AppError(ErrorCode.INTERNAL, 'Could not load the session.', { cause: error })
+  if (!data) return null
+  const embed = (data as { job?: { id: string }[] | { id: string } | null }).job
+  const jobRef = Array.isArray(embed) ? (embed[0] ?? null) : (embed ?? null)
+  if (!jobRef) return null
+  const job = await getJob(client, scope, jobRef.id)
+  if (!job) return null
+  return data as unknown as ScopedSessionRow
+}
+
+export interface RetryOutcome {
+  /** failed rows flipped back to pending (the §9.3 retry unit). */
+  requeued: number
+  /** rows still pending from an interrupted/key-broken run, now resumed. */
+  resumed: number
+}
+
+/**
+ * Retry re-queues FAILED rows individually and revives the terminal session —
+ * fresh and engine-agnostic (batch provenance is RESET so the §9.2 upgrade
+ * decision re-evaluates on the real pending volume). Nothing to redo → 0s
+ * (the route answers a plain 200 no-op).
+ */
+export async function retryScreeningSession(
+  client: Client,
+  scope: Scope,
+  sessionId: string,
+): Promise<RetryOutcome | null> {
+  const session = await loadScopedSession(client, scope, sessionId)
+  if (!session) return null
+  if (!canRetrySession(session.status)) {
+    throw new AppError(ErrorCode.CONFLICT, 'This session is still running — stop it first.')
+  }
+
+  const { data: requeuedRows, error: requeueError } = await client
+    .from('ai_screening_results')
+    .update({ status: 'pending', error: null })
+    .eq('session_id', sessionId)
+    .eq('status', 'failed')
+    .select('id')
+  if (requeueError)
+    throw new AppError(ErrorCode.INTERNAL, 'Could not re-queue failed candidates.', {
+      cause: requeueError,
+    })
+  const requeued = (requeuedRows ?? []).length
+
+  const { count: pendingCount, error: pendingError } = await client
+    .from('ai_screening_results')
+    .select('id', { count: 'exact', head: true })
+    .eq('session_id', sessionId)
+    .eq('status', 'pending')
+  if (pendingError)
+    throw new AppError(ErrorCode.INTERNAL, 'Could not count remaining candidates.', {
+      cause: pendingError,
+    })
+  const resumed = pendingCount ?? 0
+
+  if (requeued === 0 && resumed === 0) return { requeued: 0, resumed: 0 }
+
+  const { error: updateError } = await client
+    .from('ai_screening_sessions')
+    .update({
+      status: 'processing',
+      completed_at: null,
+      locked_at: null,
+      // The requeued rows stop counting as failed NOW; fresh failures re-count.
+      failed: Math.max(0, session.failed - requeued),
+      engine: 'interactive',
+      engine_ref: null,
+    })
+    .eq('id', sessionId)
+  if (updateError)
+    throw new AppError(ErrorCode.INTERNAL, 'Could not revive the session.', {
+      cause: updateError,
+    })
+  return { requeued, resumed }
+}
+
+/**
+ * Cancel an in-flight session (17 §9.3). A live Gemini Batch is cancelled
+ * remotely best-effort — the local session is the source of truth and NEVER
+ * blocks on the provider (D4). Pending rows stay unscreened; retry revives.
+ */
+export async function cancelScreeningSession(
+  client: Client,
+  scope: Scope,
+  sessionId: string,
+): Promise<{ cancelled: true } | null> {
+  const session = await loadScopedSession(client, scope, sessionId)
+  if (!session) return null
+  if (!canCancelSession(session.status)) {
+    throw new AppError(ErrorCode.CONFLICT, 'This session is no longer running.')
+  }
+
+  if (session.engine === 'batch' && session.engine_ref) {
+    const key = await resolveScopeAiKey(client, scope)
+    if (key) {
+      // Best-effort: cancelBatch absorbs its own failures (D4 by design).
+      await makeBatchClient({ apiKey: key.apiKey, model: key.model }).cancelBatch(
+        session.engine_ref,
+      )
+    }
+  }
+
+  const { error: updateError } = await client
+    .from('ai_screening_sessions')
+    .update({
+      status: 'cancelled',
+      completed_at: new Date().toISOString(),
+      locked_at: null,
+    })
+    .eq('id', sessionId)
+  if (updateError)
+    throw new AppError(ErrorCode.INTERNAL, 'Could not cancel the session.', {
+      cause: updateError,
+    })
+  return { cancelled: true }
 }
