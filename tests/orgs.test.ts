@@ -357,3 +357,27 @@ describe('migration SQL sanity (docs/13 §Phase-4 — static checks)', () => {
     expect(sql).toMatch(/deleted_at\s+is\s+null/i)
   })
 })
+
+describe('migration 0010 — workspace chooser (docs/11 §6 — static checks)', () => {
+  const sql = readFileSync('supabase/migrations/0010_workspace_chooser.sql', 'utf8')
+
+  it('adds the onboarded flag additively', () => {
+    expect(sql).toMatch(
+      /alter table public\.users\s+add column if not exists workspace_onboarded_at/i,
+    )
+  })
+
+  it('backfill only stamps users who already had an explicit default org', () => {
+    expect(sql).toMatch(
+      /update public\.users\s+set workspace_onboarded_at = now\(\)\s+where default_organization_id is not null/i,
+    )
+  })
+
+  it('accept_org_invite re-creation stamps workspace_onboarded_at alongside default_organization_id', () => {
+    expect(sql).toMatch(/create or replace function public\.accept_org_invite/i)
+    expect(sql).toMatch(
+      /default_organization_id = coalesce\(u\.default_organization_id, v_invite\.organization_id\)/i,
+    )
+    expect(sql).toMatch(/workspace_onboarded_at = coalesce\(u\.workspace_onboarded_at, now\(\)\)/i)
+  })
+})

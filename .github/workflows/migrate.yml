@@ -1,0 +1,94 @@
+# migrate.yml — docs/12 §4 step 4, §5 workflow table.
+# Merge to main -> apply supabase/migrations/* to staging -> smoke test -> apply
+# to prod. A pg_dump snapshot is taken before each apply and kept as a workflow
+# artifact so a catastrophic migration has a restore point (docs/12 §4 step 5).
+#
+# Secrets-gated end to end: every job below no-ops (never fails the run) until
+# these repo secrets are configured —
+#   SUPABASE_ACCESS_TOKEN            personal/service access token for the CLI
+#   STAGING_PROJECT_REF / PROD_PROJECT_REF   Supabase project refs
+#   STAGING_DB_URL / PROD_DB_URL      Postgres connection strings (for pg_dump)
+#   STAGING_APP_URL                   deployed staging URL, for the smoke check
+name: migrate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/migrations/**'
+
+concurrency:
+  group: migrate-${{ github.ref }}
+  cancel-in-progress: false # never cancel a migration mid-flight
+
+jobs:
+  staging:
+    runs-on: ubuntu-latest
+    if: ${{ secrets.SUPABASE_ACCESS_TOKEN != '' && secrets.STAGING_PROJECT_REF != '' }}
+    outputs:
+      smoke_ok: ${{ steps.smoke.outputs.ok }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Snapshot staging before migrating
+        env:
+          SUPABASE_DB_URL: ${{ secrets.STAGING_DB_URL }}
+        run: pg_dump "$SUPABASE_DB_URL" -F c -f staging-pre-migrate.dump
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: staging-pre-migrate-snapshot
+          path: staging-pre-migrate.dump
+          retention-days: 30
+
+      - name: Apply pending migrations to staging
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          supabase link --project-ref "${{ secrets.STAGING_PROJECT_REF }}"
+          supabase db push
+
+      - name: Smoke test staging
+        id: smoke
+        if: ${{ secrets.STAGING_APP_URL != '' }}
+        run: |
+          status=$(curl -s -o /tmp/health.json -w '%{http_code}' "${{ secrets.STAGING_APP_URL }}/api/health")
+          cat /tmp/health.json
+          ok=$(node -pe "JSON.parse(require('fs').readFileSync('/tmp/health.json','utf8')).ok === true")
+          if [ "$status" != "200" ] || [ "$ok" != "true" ]; then
+            echo "Staging smoke check failed (status=$status ok=$ok)"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+
+  prod:
+    needs: staging
+    runs-on: ubuntu-latest
+    if: ${{ needs.staging.result == 'success' && secrets.SUPABASE_ACCESS_TOKEN != '' && secrets.PROD_PROJECT_REF != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Snapshot prod before migrating
+        env:
+          SUPABASE_DB_URL: ${{ secrets.PROD_DB_URL }}
+        run: pg_dump "$SUPABASE_DB_URL" -F c -f prod-pre-migrate.dump
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prod-pre-migrate-snapshot
+          path: prod-pre-migrate.dump
+          retention-days: 90
+
+      - name: Apply pending migrations to prod
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          supabase link --project-ref "${{ secrets.PROD_PROJECT_REF }}"
+          supabase db push

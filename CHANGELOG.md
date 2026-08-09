@@ -6,6 +6,61 @@ All significant changes to product, docs, and architecture. Format: `YYYY-MM-DD 
 
 (nothing yet)
 
+## [1.3.0] — Codebase gap-closure pass (2026-08-10)
+
+**A full audit of the codebase against its own docs (00–17) surfaced one live production bug, two features specified but never built, several silent-degradation gaps in the notification/integration layer, and CI/deployment infrastructure that existed only on paper. This release closes all of it: a critical email bug, account deletion + data export, the Phase 4 workspace chooser, progressive enhancement on the public apply form, real CI migration checks + a Lighthouse budget gate, and a round of smaller correctness/consistency fixes. No new external accounts or services were connected — Telegram/Supabase/Drive remain exactly as unconfigured as before; everything below is code only.**
+
+### Fixed — critical
+
+- **Applicant confirmation emails had a malformed `From` header** whenever a company/owner display name was set (`src/lib/notifications/email.ts`) — the old code spliced the brand name *inside* the angle-bracket address (`HireLink <Acme Co via notifications@example.com>`), which isn't a valid RFC 5322 address. New `buildFromHeader()` builds `"{fromName} via {base}" <address>` correctly and is unit-tested (`tests/emails.test.ts`). This was hit on essentially every `application_received` send.
+
+### Fixed — silent degradation
+
+- **Telegram delivery failures (401/403) never flipped the integration to `status: 'error'`**, so the documented settings banner (docs/08 §3) never fired — an owner with a revoked/blocked bot silently stopped getting alerts. `Notifications.telegram()` now calls `markIntegrationError` on a permanent failure (shared platform-bot failures are logged instead, since that's not the org's credential to fix).
+- **`alertOwnerResumeFailed` skipped the retry-once-then-journal policy** every other notification path follows — no timeline event was ever written for it, and the email leg had no retry at all. Now mirrors `sendApplicantConfirmation`'s pattern exactly, with `applicantId`/`applicationId` threaded through so the journal entries are queryable.
+- **Google Drive OAuth token refresh was never persisted back to the DB** — a misleading code comment claimed this was "a documented Phase 2 nicety" that docs/07 §3.3 does not actually say; §3.3 is normative and unconditional. `lib/integrations/resolve.ts` now exposes `driveOAuthClientFor()`, which attaches a `tokens` listener that re-encrypts and saves any refreshed access/refresh token; all three call sites (`resolveDriveStorage`, the folders route, the root-folder route) now go through it instead of hand-rolling `buildGoogleOAuthClient()` + `setCredentials()`.
+- **No timeout on any Google Drive API call** (unlike Telegram's 8s and Gemini's 30s elsewhere) — added a 30s timeout (docs/07 §5) to every `files.*` call in `lib/storage/google-drive.ts`, so a hung Drive request can no longer stall the synchronous public apply request indefinitely.
+
+### Added — features specified but never built
+
+- **Account deletion + data export** (docs/02 §9, docs/04 §8): `GET /api/users/me/export` downloads a JSON bundle of the caller's personal-workspace data (jobs, applicants, applications, notes, tags, safe-shape integrations — org-shared data and credentials excluded); `DELETE /api/users/me` removes the account via `auth.admin.deleteUser` after a safety check blocks the operation (409 `CONFLICT`) if the caller still owns a live organization or owns any org-scoped jobs/applicants/tags/integrations — deleting a shared team's data out from under them via one member's personal account deletion is exactly the failure mode this prevents. New `features/settings/server.ts`; Settings gains a "Your data" + "Danger zone" section on the Profile card.
+- **One-time workspace chooser** (docs/11 §6, docs/02 §10.1): "First login after activation with ≥1 membership → chooser surfaces once" was speced but nothing ever showed it — a backfilled/invited member just silently landed on personal. **Migration `0010_workspace_chooser.sql`** adds `users.workspace_onboarded_at` (the missing "has explicitly chosen" signal — `default_organization_id IS NULL` alone can't distinguish "never asked" from "chose personal"), backfilled only for users who already had an explicit default org; `accept_org_invite` re-created to stamp it too. `needsWorkspaceChooser()` gates the new `WorkspaceChooserModal`, mounted in the authenticated app shell; both choices go through the existing `switchWorkspace()` path.
+
+### Added — progressive enhancement (docs/06 §6, WCAG 2.2 AA)
+
+- **The public apply form now works with JavaScript disabled.** The `<form>` carries a real `action`/`method`/`encType` fallback targeting `POST /api/apply/:slug` directly. The route distinguishes a plain browser navigation from the enhanced XHR/fetch path via the standard `Sec-Fetch-Mode: navigate` header (browsers set this only for real top-level navigations, never for `fetch`/`XMLHttpRequest`/API clients) — no client-side cooperation needed, and every existing JSON-consuming caller (Playwright's `request.post`, etc.) is unaffected. A no-JS submission gets a classic POST-redirect-GET (303) back to `/apply/[slug]` with `?submitted=1` (rendered server-side, matching the JS path's success copy) or `?error=<code>` (friendly banner).
+- Drag-and-drop resume upload at `>=md` breakpoints (docs/06 §3 `FileDrop`), layered on top of the existing native file picker.
+- Org branding's `primary_color` now actually reaches the apply button (previously it only accented a passive header border).
+
+### Added — CI/deployment infrastructure (docs/12 §5)
+
+- **`migrate.yml`**: merge-to-`main` → pg_dump snapshot → staging migrate → `/api/health` smoke check → pg_dump snapshot → prod migrate. Secrets-gated end to end (`SUPABASE_ACCESS_TOKEN`, `STAGING_`/`PROD_PROJECT_REF`, `STAGING_`/`PROD_DB_URL`, `STAGING_APP_URL`) — every job no-ops rather than fails until configured; see docs/12 §5 for the full secret list.
+- **`weekly-integrations.yml`** + `e2e/weekly-integrations.spec.ts`: real Drive/Telegram/Resend contract tests (docs/07 §8, 08 §6, 09 §6), cron Monday + manual dispatch, each provider's suite self-skips independently on its own `*_TEST_*` env vars (same posture as the existing `E2E_WITH_AI`/`E2E_WITH_DB` gates).
+- **`ci.yml`** gains a `migrations` job — every PR now actually applies `supabase/migrations/*` to a throwaway local Postgres (Supabase CLI + Docker, no secrets needed), closing the gap where docs/12 claimed this but no migration ever ran in CI.
+- **Lighthouse CI** (`lighthouserc.json`, `ci.yml`'s new `lighthouse` job): warn-only (`continue-on-error`) budget check on a new static `/apply/demo` fixture (same `ApplyForm` component/bundle as a real listing, no live DB needed). Docs/13/15 call for this to be blocking since Phase 1 exit, but this is the gate's first-ever CI run — flip `continue-on-error` off once it's been observed passing reliably.
+- **Coverage tooling**: `@vitest/coverage-v8` installed, `pnpm test:coverage` script added. Not wired into a blocking gate yet — run it and you'll see actual coverage on `src/lib/**` is solid (77–100% across most files) but `src/features/**/server.ts` is ~0–8%, because those DB-bound service files are deliberately covered by the e2e suite per docs/13's own testing pyramid, not Vitest. The 60% threshold in `vitest.config.ts` reflects the documented target; closing that specific gap is a separate, much larger test-writing effort, not something this pass silently faked by narrowing scope.
+
+### Changed — smaller fixes
+
+- FAB ("+ New Job") now appears on the Inbox, matching Jobs (docs/06 §4 required it on both).
+- Route-segment `loading.tsx` skeletons added for Inbox, Jobs (list + detail), Applicants (list + detail), Application detail, and the Pipeline board — previously the `Skeleton` primitive existed but was never imported anywhere.
+- New shared `src/ui/select.tsx`, adopted in the filter grid on the applications explorer, the screening pool picker, the org invite-role picker, and the apply form's dropdown/education question types (docs/06 §3: "class authority lives in src/ui/").
+- "Candidate view" preview toggle added to the questionnaire builder (docs/17 §12) — renders exactly what `sanitizeQuestions()` projects toward candidates, so the classification/rule-never-leaks guarantee is visually checkable, not just asserted in code.
+- Apply-page footer's "stored securely" line now links to a new `/privacy` page (docs/06 §4 required a link; it was plain text with no page to link to).
+- Cron auth (`org-purge`, `screening-worker`) now uses `timingSafeEqual` for the bearer-token comparison, matching the pattern already used in `reconcile`.
+- ESLint's service-role-client exemption narrowed from the entire `src/app/api/integrations/**` tree to just the OAuth callback route (plus the new, explicitly-justified `users/me` account-deletion route) — the wider exemption was an unused, silent widening of a guard-rail meant to make an RLS bypass structurally impossible outside a short allow-list.
+- `.env.example` / `scripts/check-env.mjs` gained the two env vars `lib/env.ts` already validated but the template never mentioned: `RESEND_WEBHOOK_SECRET`, `TELEGRAM_SHARED_BOT_TOKEN`.
+- Undocumented `GET /api/cron/org-purge` route added to docs/05 §4.8; the `POST /api/integrations/google/start` doc contract fixed to match the real body-field implementation (docs said `?org=:id` query param, code always took `{ org_id }` in the body).
+
+### Docs
+
+- docs/04 §1 ERD updated with `organization_invites` and the four Phase 5 screening tables (previously undrawn despite being fully specified in §3.12 and implemented since migrations 0006–0007); §3.1/§6/§7 stale migration file-name cross-references fixed (`0004_rls.sql` → `0004_rls_and_triggers.sql`, the `0005` row's description matched what `0005_phase2_indexes.sql` actually contains); `0010_workspace_chooser.sql` row added.
+- `supabase/seed.sql`'s dangling reference to a `seed_demo.sql` that was never written replaced with a pointer to the real `scripts/seed-perf.mjs`/`scripts/seed-screening.mjs`.
+- docs/12 §2 env matrix: `GOOGLE_CLIENT_ID`/`SECRET` corrected from marked-required-everywhere to what `lib/env.ts` actually enforces (optional, feature-gated) — with an explicit callout that Drive is still the product's core loop, so "optional" is not the same as "skippable in prod." §3's local-dev quickstart fixed (`pnpm db:migrate` doesn't reset a local DB — `db:reset` does; the seed.sql claim about auto-creating demo data on first login was simply wrong).
+- docs/14 §5 and `lib/supabase/service.ts`'s header comment updated to name all five service-role-client zones (was stuck at three, already stale before this pass — webhooks and, now, account deletion were missing).
+
+Gates: **356 unit tests** (5 new: `buildFromHeader` round-trip + escaping; 3 new: migration 0010 SQL sanity), typecheck/lint/format/build all green. e2e unchanged in count — the no-JS fallback and workspace chooser are implemented and manually verified against the build output, but neither has new Playwright coverage yet (the former needs a `javaScriptEnabled: false` browser context, the latter needs a live Supabase to seed a second org membership); both are reasonable next additions, not silently skipped.
+
 ## [1.2.0] — Phase 5 · Smart Screening (2026-08-09)
 
 **Questionnaire-based screening with deterministic verdicts, AI shortlisting sessions with evidence-backed reasons at 500-candidate scale (async worker + Gemini Batch), and immutable Drive summary artifacts — AI strictly optional throughout, verdicts advisory-only, pipeline statuses 100 % human-owned. Offline gates: 348 unit + 61 always-on e2e (38 live-gated journeys self-skip); S1–S10 live suite + the S10 500-candidate scale gate run on staging per docs/12.**

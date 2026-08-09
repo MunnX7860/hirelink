@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { renderEmail } from '@/emails/registry'
+import { buildFromHeader } from '@/lib/notifications/email'
 import { sanitizeDriveName } from '@/lib/storage/google-drive'
 
 /** Email registry — docs/09 §6 (snapshot-style content assertions + plaintext). */
@@ -27,6 +28,39 @@ describe('email registry (docs/09 §2)', () => {
     expect(subject).toContain('Chef')
     expect(html).toContain('Raj Kumar')
     expect(html).toContain('/dashboard/settings')
+  })
+})
+
+describe('buildFromHeader (docs/09 §1 — From display name, never the address)', () => {
+  it('wraps a brand name as "{fromName} via {base}" and leaves the address untouched', () => {
+    expect(buildFromHeader('HireLink <notifications@example.com>', 'Blue Tokai Café')).toBe(
+      '"Blue Tokai Café via HireLink" <notifications@example.com>',
+    )
+  })
+
+  it('uses the base name as-is when no fromName is given (system alerts)', () => {
+    expect(buildFromHeader('HireLink <notifications@example.com>')).toBe(
+      '"HireLink" <notifications@example.com>',
+    )
+  })
+
+  it('handles an EMAIL_FROM with no display name', () => {
+    expect(buildFromHeader('notifications@example.com', 'Acme Co')).toBe(
+      '"Acme Co" <notifications@example.com>',
+    )
+    expect(buildFromHeader('notifications@example.com')).toBe('notifications@example.com')
+  })
+
+  it('escapes embedded quotes in the display name', () => {
+    expect(buildFromHeader('HireLink <notifications@example.com>', 'Bob "The Builder" Co')).toBe(
+      '"Bob \\"The Builder\\" Co via HireLink" <notifications@example.com>',
+    )
+  })
+
+  it('always produces a syntactically valid addr-spec (no fromName text inside the angle brackets)', () => {
+    const from = buildFromHeader('HireLink <notifications@example.com>', 'Space Name Co')
+    const address = from.match(/<(.+)>/)?.[1]
+    expect(address).toBe('notifications@example.com')
   })
 })
 

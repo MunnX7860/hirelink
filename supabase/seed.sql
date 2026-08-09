@@ -4,8 +4,10 @@
 --
 --   1) `supabase start` + `pnpm dev`
 --   2) Sign in with Google (docs/12 §3) — the 0004 trigger creates your public.users row
---   3) Then run `supabase/seed_demo.sql` against your user id if you want sample data:
---        psql $DB_URL -v owner="'<your-user-uuid>'" -f supabase/seed_demo.sql
+--   3) For bulk sample data, run one of the Node seed scripts against your own owner id
+--      (service-role, local/staging-only guarded): `scripts/seed-perf.mjs` (10k applications)
+--      or `scripts/seed-screening.mjs` (500-candidate screening probe). There is no SQL
+--      demo-seed file — use the app UI directly for a handful of manual sample rows.
 --
 -- Intentionally a no-op so `supabase db reset` stays green on a fresh clone.
 select 'seed: no-op (sign in first — see comments in supabase/seed.sql)' as note;

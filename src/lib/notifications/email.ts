@@ -10,12 +10,37 @@ import { logger } from '@/lib/logger'
  * null-transport that renders + logs (`simulated: true`) so local dev works without keys.
  */
 
+/** Splits `"Name" <addr>` / `Name <addr>` / `addr` into its parts. Unquotes a quoted name. */
+function parseFromAddress(emailFrom: string): { name: string; address: string } {
+  const match = emailFrom.match(/^(.*)<(.+)>\s*$/)
+  if (!match) return { name: '', address: emailFrom.trim() }
+  const rawName = (match[1] ?? '').trim()
+  const name = rawName.replace(/^"(.*)"$/, '$1')
+  return { name, address: (match[2] ?? '').trim() }
+}
+
+/**
+ * Builds a valid RFC 5322 From header: `"Display Name" <address>`.
+ * docs/09 §1: display name is `"{Owner/Company name} via HireLink"` when `fromName`
+ * is given (applicant-facing emails); the base name as-is otherwise (system alerts
+ * to the owner, docs/09 §2 `owner_resume_failed`). The address is never touched —
+ * only the display name changes, unlike the previous implementation which spliced
+ * `fromName` inside the angle brackets and produced an invalid address.
+ */
+export function buildFromHeader(emailFrom: string, fromName?: string): string {
+  const { name: baseName, address } = parseFromAddress(emailFrom)
+  const displayName = fromName ? (baseName ? `${fromName} via ${baseName}` : fromName) : baseName
+  if (!displayName) return address
+  return `"${displayName.replace(/"/g, '\\"')}" <${address}>`
+}
+
 export async function sendEmail(input: {
   to: string
   subject: string
   html: string
   text: string
-  fromName: string
+  /** Applicant-facing brand name, rendered as "{fromName} via {base}". Omit for owner-facing system alerts. */
+  fromName?: string
   template: string
 }): Promise<DeliveryResult & { simulated?: boolean; messageId?: string }> {
   if (!features.email) {
@@ -29,7 +54,7 @@ export async function sendEmail(input: {
 
   try {
     const resend = new Resend(env.RESEND_API_KEY)
-    const from = env.EMAIL_FROM.replace('<', `<${input.fromName} via `)
+    const from = buildFromHeader(env.EMAIL_FROM, input.fromName)
     // Note: Resend SDK handles its own request timeouts; AbortSignal isn't
     // part of CreateEmailRequestOptions in this SDK version.
     const { data, error } = await resend.emails.send({

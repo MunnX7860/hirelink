@@ -6,6 +6,7 @@ import { Card, CardHeader, CardTitle } from '@/ui/card'
 import { Button } from '@/ui/button'
 import { Badge } from '@/ui/badge'
 import { Input } from '@/ui/input'
+import { Select } from '@/ui/select'
 import { Textarea } from '@/ui/textarea'
 import { ApiError, api, mutate } from '@/lib/api-client'
 import { relativeTime } from '@/lib/time'
@@ -542,21 +543,18 @@ export function ScreeningDashboard({
           </p>
         ) : (
           <div className="flex flex-col gap-3">
-            <label className="flex flex-col gap-1.5" htmlFor="screen-pool">
-              <span className="text-sm font-medium text-ink">Who should be screened?</span>
-              <select
-                id="screen-pool"
-                value={pool}
-                onChange={(e) => setPool(e.target.value)}
-                className="h-11 rounded-lg border border-slate-300 bg-surface px-3 text-base text-ink"
-              >
-                {Object.entries(POOL_LABEL).map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label} ({poolCounts[value] ?? 0})
-                  </option>
-                ))}
-              </select>
-            </label>
+            <Select
+              id="screen-pool"
+              label="Who should be screened?"
+              value={pool}
+              onChange={(e) => setPool(e.target.value)}
+            >
+              {Object.entries(POOL_LABEL).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label} ({poolCounts[value] ?? 0})
+                </option>
+              ))}
+            </Select>
             <Textarea
               label="What should the AI look for?"
               value={instruction}

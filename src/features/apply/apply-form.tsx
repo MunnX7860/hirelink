@@ -3,6 +3,7 @@
 import { useMemo, useRef, useState } from 'react'
 import { Card } from '@/ui/card'
 import { Input } from '@/ui/input'
+import { Select } from '@/ui/select'
 import { Textarea } from '@/ui/textarea'
 import { Button } from '@/ui/button'
 import { RESUME_MAX_BYTES, RESUME_MIME_LABELS } from '@/features/applications/constants'
@@ -33,12 +34,15 @@ export function ApplyForm({
   jobTitle,
   formConfig,
   questions = [],
+  primaryColor = null,
 }: {
   slug: string
   jobTitle: string
   formConfig: FormConfigValue
   /** Phase 5 (17 §3.3): sanitized question schema — never carries rules. */
   questions?: PublicQuestionValue[]
+  /** docs/11 §9: org brand accent (pro/team custom branding only) — accents the primary CTA. */
+  primaryColor?: string | null
 }) {
   const [phase, setPhase] = useState<Phase>({ kind: 'form' })
   const [errors, setErrors] = useState<Record<string, string>>({})
@@ -104,6 +108,31 @@ export function ApplyForm({
       delete next.resume
       return next
     })
+  }
+
+  // Drag-and-drop resume upload — docs/06 §3 FileDrop primitive: native picker on
+  // mobile (below), drag-drop layered on top for >=md pointer/mouse devices only
+  // (touch devices never fire HTML5 drag events, so no extra gating is needed).
+  const [dragActive, setDragActive] = useState(false)
+
+  function onDragOver(ev: React.DragEvent<HTMLDivElement>) {
+    ev.preventDefault()
+    setDragActive(true)
+  }
+
+  function onDragLeave() {
+    setDragActive(false)
+  }
+
+  function onDrop(ev: React.DragEvent<HTMLDivElement>) {
+    ev.preventDefault()
+    setDragActive(false)
+    const file = ev.dataTransfer.files?.[0]
+    if (!file || !fileRef.current) return
+    const dt = new DataTransfer()
+    dt.items.add(file)
+    fileRef.current.files = dt.files
+    onFileChange()
   }
 
   function onSubmit(ev: React.FormEvent<HTMLFormElement>) {
@@ -198,7 +227,14 @@ export function ApplyForm({
 
   return (
     <Card>
-      <form onSubmit={onSubmit} noValidate className="flex flex-col gap-4">
+      <form
+        action={`/api/apply/${slug}`}
+        method="post"
+        encType="multipart/form-data"
+        onSubmit={onSubmit}
+        noValidate
+        className="flex flex-col gap-4"
+      >
         <Input
           label="Full name"
           name="full_name"
@@ -249,11 +285,19 @@ export function ApplyForm({
           />
         ))}
         {fields.resume !== 'hidden' ? (
-          <div className="flex flex-col gap-1.5">
+          <div
+            onDragOver={onDragOver}
+            onDragLeave={onDragLeave}
+            onDrop={onDrop}
+            className={`flex flex-col gap-1.5 rounded-lg md:border-2 md:border-dashed md:p-2 md:transition-colors ${
+              dragActive ? 'md:border-brand md:bg-brand/5' : 'md:border-transparent'
+            }`}
+          >
             <label htmlFor="resume" className="text-sm font-medium text-ink">
               {fields.resume === 'required' ? 'Resume' : 'Resume (optional)'}{' '}
               <span className="font-normal text-ink-secondary">
                 ({Object.values(RESUME_MIME_LABELS).join(', ')}, max 10 MB)
+                <span className="hidden md:inline"> · drag and drop or click to browse</span>
               </span>
             </label>
             <input
@@ -304,7 +348,13 @@ export function ApplyForm({
           </p>
         ) : null}
 
-        <Button type="submit" size="lg" className="mt-1 w-full" loading={submitting}>
+        <Button
+          type="submit"
+          size="lg"
+          className="mt-1 w-full"
+          loading={submitting}
+          style={primaryColor ? { backgroundColor: primaryColor } : undefined}
+        >
           Submit application
         </Button>
       </form>
@@ -424,17 +474,14 @@ function QuestionField({
 
     case 'dropdown':
       return (
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor={`q_${question.id}`} className="text-sm font-medium text-ink">
-            {labelText}
-          </label>
-          <select
+        <div>
+          <Select
             id={`q_${question.id}`}
+            label={labelText}
             value={typeof value === 'string' ? value : ''}
             onChange={(e) => onChange(e.target.value)}
             disabled={disabled}
             aria-invalid={Boolean(error)}
-            className="h-11 w-full rounded-lg border border-slate-300 bg-surface px-3 text-base text-ink focus:border-brand"
           >
             <option value="">Select…</option>
             {(question.options ?? []).map((option) => (
@@ -442,24 +489,21 @@ function QuestionField({
                 {option}
               </option>
             ))}
-          </select>
+          </Select>
           {errorEl}
         </div>
       )
 
     case 'education':
       return (
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor={`q_${question.id}`} className="text-sm font-medium text-ink">
-            {labelText}
-          </label>
-          <select
+        <div>
+          <Select
             id={`q_${question.id}`}
+            label={labelText}
             value={typeof value === 'string' ? value : ''}
             onChange={(e) => onChange(e.target.value)}
             disabled={disabled}
             aria-invalid={Boolean(error)}
-            className="h-11 w-full rounded-lg border border-slate-300 bg-surface px-3 text-base text-ink focus:border-brand"
           >
             <option value="">Select…</option>
             {EDUCATION_LEVELS.map((level) => (
@@ -467,7 +511,7 @@ function QuestionField({
                 {EDUCATION_LABELS[level]}
               </option>
             ))}
-          </select>
+          </Select>
           {errorEl}
         </div>
       )

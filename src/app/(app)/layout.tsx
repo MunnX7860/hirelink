@@ -4,8 +4,9 @@ import { createClient } from '@/lib/supabase/server'
 import { BottomTabs } from '@/features/shell/bottom-tabs'
 import { SignOutButton } from '@/features/auth/sign-out-button'
 import { Providers } from '@/app/(app)/providers'
-import { getMemberships, resolveWorkspace } from '@/features/orgs/server'
+import { getMemberships, needsWorkspaceChooser, resolveWorkspace } from '@/features/orgs/server'
 import { WorkspaceSwitcher } from '@/features/orgs/workspace-switcher'
+import { WorkspaceChooserModal } from '@/features/orgs/workspace-chooser-modal'
 
 /**
  * Authenticated app shell — docs/06 §4: top bar + bottom tab bar on mobile
@@ -23,9 +24,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   if (!user) redirect('/login')
 
   const displayName = user.user_metadata?.full_name ?? user.email ?? 'Account'
-  const [memberships, scope] = await Promise.all([
+  const [memberships, scope, showChooser] = await Promise.all([
     getMemberships(supabase, user.id).catch(() => []),
     resolveWorkspace(supabase, user.id),
+    needsWorkspaceChooser(supabase, user.id).catch(() => false),
   ])
   const currentOrg =
     scope.kind === 'org' ? memberships.find((m) => m.org.id === scope.orgId)?.org : undefined
@@ -68,6 +70,13 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
       {/* Mobile bottom tabs / lg rail (responsive inside) */}
       <BottomTabs />
+
+      {/* One-time workspace chooser — docs/11 §6, docs/02 §10.1 */}
+      {showChooser ? (
+        <WorkspaceChooserModal
+          orgs={memberships.map((m) => ({ id: m.org.id, name: m.org.name, role: m.role }))}
+        />
+      ) : null}
     </div>
   )
 }

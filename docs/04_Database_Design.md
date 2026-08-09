@@ -12,6 +12,7 @@ erDiagram
     users ||--o{ integrations : has
     users ||--o{ tags : defines
     organizations ||--o{ organization_members : has
+    organizations ||--o{ organization_invites : has
     users ||--o{ organization_members : joins
     organizations ||--o{ jobs : "Phase 4 scopes"
     jobs ||--o{ applications : receives
@@ -23,6 +24,10 @@ erDiagram
     applicants ||--o{ notes : has
     tags ||--o{ applicant_tags : maps
     applicants ||--o{ applicant_tags : tagged
+    applications ||--o{ application_answers : "Phase 5 answers"
+    applicants ||--o| applicant_profiles : "Phase 5 parsed profile"
+    jobs ||--o{ ai_screening_sessions : "Phase 5 sessions"
+    ai_screening_sessions ||--o{ ai_screening_results : "Phase 5 per-candidate"
 ```
 
 ## 2. Enums
@@ -51,7 +56,8 @@ create table public.users (
   email                  text not null,
   full_name              text,
   avatar_url             text,
-  default_organization_id uuid,                     -- Phase 4 FK added in 0004
+  default_organization_id uuid,                     -- Phase 4 FK added in 0006
+  workspace_onboarded_at timestamptz,                -- Phase 4 follow-up, added in 0010 (11 §6)
   notify_telegram        boolean not null default true,   -- owner alert toggles (02 §9)
   notify_applicant_email boolean not null default true,
   created_at             timestamptz not null default now(),
@@ -401,7 +407,7 @@ Phase 4 policy set (in `0006`, all additive): `*_org_member for all` on `jobs`, 
 alter table public.users         enable row level security;
 alter table public.jobs          enable row level security;   -- ... every table
 
--- representative policies (full set lives in supabase/migrations/0003_rls.sql)
+-- representative policies (full set lives in supabase/migrations/0004_rls_and_triggers.sql)
 create policy users_self      on public.users        for all using (id = auth.uid()) with check (id = auth.uid());
 create policy jobs_owner      on public.jobs         for all using (owner_id = auth.uid()) with check (owner_id = auth.uid());
 create policy applicants_owner on public.applicants  for all using (owner_id = auth.uid()) with check (owner_id = auth.uid());
@@ -416,17 +422,18 @@ Phase 5 policy set (in `0007`, additive, same pattern): `answers_*` on `applicat
 
 ## 7. Migration Plan
 
-| File                                | Contents                                                                                                                                                                                                                                                                                       | Phase |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
-| `0001_extensions_enums.sql`         | extensions (pgcrypto, citext, pg_trgm), enums                                                                                                                                                                                                                                                  | 0     |
-| `0002_core_tables.sql`              | §3 tables + constraints + `set_updated_at`                                                                                                                                                                                                                                                     | 0     |
-| `0003_indexes.sql`                  | §4 indexes                                                                                                                                                                                                                                                                                     | 0     |
-| `0004_rls.sql`                      | §6 full policy set + `handle_new_user`                                                                                                                                                                                                                                                         | 0     |
-| `0005_seed_dev.sql`                 | demo user? No — seed = 2 sample jobs + 3 applicants under a dev-only owner (never in prod)                                                                                                                                                                                                     | 0     |
-| `0006_phase4_orgs.sql`              | Phase 4 activation: `organization_invites`, `organizations.deleted_at`, FK `users.default_organization_id`, `tags.organization_id`, org indexes, `current_org_role`/`lookup_invite`/`accept_org_invite` fns, additive org RLS policies, idempotent personal-org backfill (data rows untouched) | 4     |
-| `0007_phase5_screening.sql`         | Phase 5 (17): `jobs.screening_config`, `applications.screening_status`, `application_answers`, `applicant_profiles`, `ai_screening_sessions`, `ai_screening_results`, +indexes +RLS — additive only, backfills nothing                                                                         | 5     |
-| `0008_phase5_screening_async.sql`   | Phase 5.4 (17 §9): `ai_screening_sessions.locked_at` processing lease (CAS claim / quota cooldown / crash reclamation) + partial active-session index for the worker poll — additive only                                                                                                      | 5     |
-| `0009_phase5_screening_summary.sql` | Phase 5.5 (17 §13): `ai_screening_sessions.summary_folder_id` + `summary_file_id` — immutable Drive summary artifact per completed session (write-once), additive only                                                                                                                         | 5     |
+| File                                | Contents                                                                                                                                                                                                                                                                                                                          | Phase |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
+| `0001_extensions_enums.sql`         | extensions (pgcrypto, citext, pg_trgm), enums                                                                                                                                                                                                                                                                                     | 0     |
+| `0002_core_tables.sql`              | §3 tables + constraints + `set_updated_at`                                                                                                                                                                                                                                                                                        | 0     |
+| `0003_indexes.sql`                  | §4 indexes                                                                                                                                                                                                                                                                                                                        | 0     |
+| `0004_rls_and_triggers.sql`         | §6 full policy set + `handle_new_user`                                                                                                                                                                                                                                                                                            | 0     |
+| `0005_phase2_indexes.sql`           | `notes_applicant_idx`, GIN trigram `applicants_search_trgm` on `applicants(full_name \|\| ' ' \|\| email)`, `timeline_event_type` gains `'application_deleted'` — additive only (deferred from the original seed-migration plan; `supabase/seed.sql` is a standalone no-op that runs on every `db reset`, see its header comment) | 2     |
+| `0006_phase4_orgs.sql`              | Phase 4 activation: `organization_invites`, `organizations.deleted_at`, FK `users.default_organization_id`, `tags.organization_id`, org indexes, `current_org_role`/`lookup_invite`/`accept_org_invite` fns, additive org RLS policies, idempotent personal-org backfill (data rows untouched)                                    | 4     |
+| `0007_phase5_screening.sql`         | Phase 5 (17): `jobs.screening_config`, `applications.screening_status`, `application_answers`, `applicant_profiles`, `ai_screening_sessions`, `ai_screening_results`, +indexes +RLS — additive only, backfills nothing                                                                                                            | 5     |
+| `0008_phase5_screening_async.sql`   | Phase 5.4 (17 §9): `ai_screening_sessions.locked_at` processing lease (CAS claim / quota cooldown / crash reclamation) + partial active-session index for the worker poll — additive only                                                                                                                                         | 5     |
+| `0009_phase5_screening_summary.sql` | Phase 5.5 (17 §13): `ai_screening_sessions.summary_folder_id` + `summary_file_id` — immutable Drive summary artifact per completed session (write-once), additive only                                                                                                                                                            | 5     |
+| `0010_workspace_chooser.sql`        | Phase 4 follow-up (11 §6): `users.workspace_onboarded_at`, backfilled for users who already had an explicit `default_organization_id`; `accept_org_invite` re-created to also stamp it — additive only, backfills nothing that wasn't already an explicit choice                                                                  | 4     |
 
 **No destructive migrations without a paired backup note in CHANGELOG.** Enum extensions use `alter type ... add value` (non-reversible — flagged in PR).
 

@@ -1,5 +1,7 @@
 import { AppError, ErrorCode, handleRoute } from '@/lib/errors'
 import { createClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/service'
+import { deleteOwnAccount } from '@/features/settings/server'
 import { z } from 'zod'
 
 export const runtime = 'nodejs'
@@ -33,4 +35,20 @@ export const PATCH = handleRoute(async (_ctx, request: Request) => {
     .single()
   if (error) throw new AppError(ErrorCode.INTERNAL, 'Could not save preferences.', { cause: error })
   return data as Record<string, unknown>
+})
+
+/**
+ * DELETE /api/users/me — docs/02 §9 "Delete account". Removes DB rows + stored
+ * tokens via cascade; never touches the user's Google Drive files. Blocks with
+ * 409 CONFLICT if the caller still owns a live org or org-scoped data (see
+ * deleteOwnAccount's doc comment) rather than risking teammates' shared data.
+ */
+export const DELETE = handleRoute(async () => {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) throw new AppError(ErrorCode.UNAUTHORIZED, 'Sign in required.')
+
+  await deleteOwnAccount(createServiceClient(), user.id)
 })

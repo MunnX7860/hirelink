@@ -3,14 +3,14 @@ import 'server-only'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { env } from '@/lib/env'
 import { logger } from '@/lib/logger'
-import { renderEmail, emailFrom } from '@/emails/registry'
+import { renderEmail } from '@/emails/registry'
 import { sendEmail } from '@/lib/notifications/email'
 import {
   buildNewApplicationMessage,
   buildResumeFailedMessage,
   sendTelegramMessage,
 } from '@/lib/notifications/telegram'
-import { resolveTelegram } from '@/lib/integrations/resolve'
+import { resolveTelegram, markIntegrationError } from '@/lib/integrations/resolve'
 import type {
   ApplicantConfirmation,
   NewApplicationEvent,
@@ -68,6 +68,23 @@ export class Notifications {
       orgId: this.opts.orgId ?? null,
     })
     if (!creds) return { ok: false, code: 'telegram_not_configured' }
+
+    // docs/08 §3: 401 (invalid token) / 403 (bot blocked) -> integration status='error'
+    // + settings banner. Shared platform bots (docs/11 §3) aren't the org's credential
+    // to fix, so a broken shared token is logged instead of flipping the org's row.
+    const onPermanentFailure = async (code: string | undefined) => {
+      if (creds.shared) {
+        logger.error('shared Telegram bot token rejected', { code })
+        return
+      }
+      await markIntegrationError(this.client, creds.integrationId).catch((err) => {
+        logger.error('markIntegrationError (telegram) failed', {
+          integration_id: creds.integrationId,
+          ...(err instanceof Error ? { error: err.message } : {}),
+        })
+      })
+    }
+
     const first = await sendTelegramMessage({
       botToken: creds.botToken,
       chatId: creds.chatId,
@@ -75,7 +92,10 @@ export class Notifications {
       ...(replyMarkup ? { replyMarkup } : {}),
     })
     if (first.ok) return { ok: true }
-    if (!first.retryable) return { ok: false, code: first.code }
+    if (!first.retryable) {
+      await onPermanentFailure(first.code)
+      return { ok: false, code: first.code }
+    }
     await new Promise((r) => setTimeout(r, RETRY_DELAY_MS))
     const second = await sendTelegramMessage({
       botToken: creds.botToken,
@@ -83,7 +103,9 @@ export class Notifications {
       text,
       ...(replyMarkup ? { replyMarkup } : {}),
     })
-    return second.ok ? { ok: true } : { ok: false, code: second.code }
+    if (second.ok) return { ok: true }
+    if (!second.retryable) await onPermanentFailure(second.code)
+    return { ok: false, code: second.code }
   }
 
   async notifyOwnerNewApplication(e: NewApplicationEvent): Promise<void> {
@@ -153,24 +175,52 @@ export class Notifications {
 
   async alertOwnerResumeFailed(e: ResumeFailedAlert): Promise<void> {
     try {
+      const ids = {
+        ...(e.applicantId ? { applicantId: e.applicantId } : {}),
+        ...(e.applicationId ? { applicationId: e.applicationId } : {}),
+      }
+
       const text = buildResumeFailedMessage({
         jobTitle: e.jobTitle,
         applicantName: e.applicantName,
       })
-      await this.telegram(text)
+      const telegramResult = await this.telegram(text)
+      await this.writeEvent(
+        telegramResult.ok ? 'telegram_sent' : 'telegram_failed',
+        { to: 'owner', context: 'resume_failed' },
+        ids,
+      )
+
       const rendered = await renderEmail('owner_resume_failed', {
         jobTitle: e.jobTitle,
         applicantName: e.applicantName,
         settingsUrl: `${env.NEXT_PUBLIC_APP_URL}/dashboard/settings`,
       })
-      await sendEmail({
-        to: e.ownerEmail,
-        subject: rendered.subject,
-        html: rendered.html,
-        text: rendered.text,
-        fromName: emailFrom(),
-        template: 'owner_resume_failed',
-      })
+      const send = async () =>
+        sendEmail({
+          to: e.ownerEmail,
+          subject: rendered.subject,
+          html: rendered.html,
+          text: rendered.text,
+          template: 'owner_resume_failed',
+        })
+      let emailResult = await send()
+      if (!emailResult.ok && emailResult.retryable) {
+        await new Promise((r) => setTimeout(r, RETRY_DELAY_MS))
+        emailResult = await send()
+      }
+      await this.writeEvent(
+        emailResult.ok ? 'email_sent' : 'email_failed',
+        {
+          to: 'owner',
+          template: 'owner_resume_failed',
+          ...(emailResult.simulated ? { simulated: true } : {}),
+          ...(emailResult.ok && 'messageId' in emailResult && emailResult.messageId
+            ? { message_id: emailResult.messageId }
+            : {}),
+        },
+        ids,
+      )
     } catch (err) {
       logger.error('alertOwnerResumeFailed failed', {
         owner_id: this.ownerId,

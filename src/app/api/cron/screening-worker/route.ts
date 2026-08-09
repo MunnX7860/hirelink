@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto'
 import { AppError, ErrorCode, handleRoute } from '@/lib/errors'
 import { createServiceClient } from '@/lib/supabase/service'
 import { screeningWorkerTick } from '@/features/screening/worker'
@@ -20,8 +21,11 @@ export const GET = handleRoute(async (_ctx, request: Request) => {
   if (!features.cron) {
     throw new AppError(ErrorCode.NOT_FOUND, 'Not found.')
   }
-  const auth = request.headers.get('authorization')
-  if (auth !== `Bearer ${env.CRON_SECRET}`) {
+  const auth = request.headers.get('authorization') ?? ''
+  const expected = `Bearer ${env.CRON_SECRET ?? ''}`
+  const a = Buffer.from(auth)
+  const e = Buffer.from(expected)
+  if (a.length !== e.length || !timingSafeEqual(a, e)) {
     throw new AppError(ErrorCode.UNAUTHORIZED, 'Invalid cron credentials.')
   }
 

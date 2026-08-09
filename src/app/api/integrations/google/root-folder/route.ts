@@ -1,6 +1,5 @@
 import { AppError, ErrorCode, handleRoute } from '@/lib/errors'
-import { decryptSecret } from '@/lib/crypto'
-import { getScopedIntegration, buildGoogleOAuthClient } from '@/lib/integrations/resolve'
+import { getScopedIntegration, driveOAuthClientFor } from '@/lib/integrations/resolve'
 import { createDriveFolder } from '@/lib/storage/google-drive'
 import { assertCapability, requireWorkspace } from '@/features/orgs/server'
 import { refForScope } from '@/features/orgs/scope'
@@ -32,8 +31,7 @@ export const POST = handleRoute(async (_ctx, request: Request) => {
   let folderId = body.folder_id
   let folderName: string | null = null
   if (!folderId && body.create_named) {
-    const oauth2 = buildGoogleOAuthClient()
-    oauth2.setCredentials(JSON.parse(decryptSecret(row.credentials_encrypted)))
+    const oauth2 = driveOAuthClientFor(supabase, row)
     const created = await createDriveFolder(oauth2, body.create_named)
     folderId = created.id
     folderName = body.create_named

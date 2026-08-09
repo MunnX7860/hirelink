@@ -30,6 +30,9 @@ export interface ResumeFailedAlert {
   applicantName: string
   ownerEmail: string
   companyLabel: string
+  /** Phase 4: journaled events anchor to the applicant/application so scoped timeline feeds include them. */
+  applicantId?: string
+  applicationId?: string
 }
 
 export interface NotificationService {

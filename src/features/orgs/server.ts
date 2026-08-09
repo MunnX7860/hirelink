@@ -200,15 +200,48 @@ export async function switchWorkspace(
   }
   if (!organizationId) {
     cookieStore.set(WORKSPACE_COOKIE, 'personal', cookieBase)
-    // Sticky default follows the explicit personal choice (docs/11 §1).
-    await client.from('users').update({ default_organization_id: null }).eq('id', userId)
+    // Sticky default follows the explicit personal choice (docs/11 §1). Switching
+    // is itself an explicit workspace decision, so it also satisfies the one-time
+    // chooser (docs/11 §6) if it hadn't fired yet — always restamping is harmless,
+    // this column is only ever read as a boolean "has chosen" signal.
+    await client
+      .from('users')
+      .update({ default_organization_id: null, workspace_onboarded_at: new Date().toISOString() })
+      .eq('id', userId)
     return { kind: 'personal' }
   }
   const membership = await getMembership(client, userId, organizationId)
   if (!membership) throw new AppError(ErrorCode.NOT_FOUND, 'Organization not found.')
   cookieStore.set(WORKSPACE_COOKIE, organizationId, cookieBase)
-  await client.from('users').update({ default_organization_id: organizationId }).eq('id', userId)
+  await client
+    .from('users')
+    .update({
+      default_organization_id: organizationId,
+      workspace_onboarded_at: new Date().toISOString(),
+    })
+    .eq('id', userId)
   return { kind: 'org', org: { ...membership.org, role: membership.role } }
+}
+
+/**
+ * One-time workspace chooser (docs/11 §6, docs/02 §10.1): true when the user
+ * has never made an explicit personal-vs-org choice AND has >=1 membership to
+ * choose between. `default_organization_id IS NULL` alone can't tell "never
+ * chosen" apart from "explicitly chose personal" — `workspace_onboarded_at` is
+ * the dedicated signal (migration 0010).
+ */
+export async function needsWorkspaceChooser(client: Client, userId: string): Promise<boolean> {
+  const { data } = await client
+    .from('users')
+    .select('workspace_onboarded_at')
+    .eq('id', userId)
+    .maybeSingle()
+  const onboarded = Boolean(
+    (data as { workspace_onboarded_at?: string | null } | null)?.workspace_onboarded_at,
+  )
+  if (onboarded) return false
+  const memberships = await getMemberships(client, userId)
+  return memberships.length > 0
 }
 
 // ── Usage counters + plan gate helpers (docs/11 §4) ──────────────────────────

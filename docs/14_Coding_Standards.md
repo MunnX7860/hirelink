@@ -50,7 +50,7 @@ Rules:
 
 - All schema change = migration file (04 §7); **never** edit via Supabase dashboard on shared envs.
 - Use generated `Database` types with supabase-js; write explicit column lists (no `select('*')` outside tiny tables).
-- Service-role client imports are restricted to: `apply` feature, integration callbacks, cron — enforced by an ESLint `no-restricted-imports` rule (`lib/db.ts` exports marked).
+- Service-role client imports are restricted to: `apply` feature, integration callbacks (OAuth redirect endpoints only), cron, signed webhooks, and self account deletion (`DELETE /api/users/me` — needs the GoTrue Admin API to remove the caller's own `auth.users` row; every query it runs still filters by the caller's own verified user id) — enforced by an ESLint `no-restricted-imports` rule (`eslint.config.mjs`).
 - Transactions: via Postgres RPC only when multi-write atomicity needed (e.g. application create) — document the RPC in 04 before use.
 
 ## 6. Secrets Policy (hard rules)

@@ -3,7 +3,8 @@ import 'server-only'
 import { OAuth2Client } from 'google-auth-library'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { env } from '@/lib/env'
-import { decryptSecret } from '@/lib/crypto'
+import { decryptSecret, encryptSecret } from '@/lib/crypto'
+import { logger } from '@/lib/logger'
 import { GoogleDriveStorage } from '@/lib/storage/google-drive'
 import type { StorageProvider } from '@/lib/storage/types'
 
@@ -152,8 +153,7 @@ export async function resolveDriveStorage(
   const rootFolderId = (resolved.row.config as { root_folder_id?: string }).root_folder_id
   if (!rootFolderId) return null
 
-  const oauth2 = buildGoogleOAuthClient()
-  oauth2.setCredentials(JSON.parse(decryptSecret(resolved.row.credentials_encrypted)))
+  const oauth2 = driveOAuthClientFor(client, resolved.row)
   return {
     integrationId: resolved.row.id,
     storage: new GoogleDriveStorage(oauth2, rootFolderId),
@@ -168,6 +168,55 @@ export function buildGoogleOAuthClient(): OAuth2Client {
     env.GOOGLE_CLIENT_SECRET,
     `${env.NEXT_PUBLIC_APP_URL}/api/integrations/google/callback`,
   )
-  // google-auth-library refreshes the access token automatically when it expires;
-  // refresh-token rotation persistence is a documented Phase 2 nicety (docs/07 §3 note).
+}
+
+/**
+ * Attaches a `tokens` listener that re-encrypts + persists any refreshed access
+ * token — and, when Google rotates it, the refresh token — back onto the
+ * integration row (docs/07 §3.3, normative: "always persist returned refresh
+ * tokens"). Without this, a Google-side rotation leaves the DB serving a
+ * now-invalid refresh token, and the owner hits an unexplained `invalid_grant`.
+ */
+function attachTokenPersistence(
+  oauth2: OAuth2Client,
+  client: Client,
+  integrationId: string,
+  baseCredentials: Record<string, unknown>,
+): void {
+  let latest = baseCredentials
+  oauth2.on('tokens', (tokens) => {
+    latest = { ...latest, ...tokens }
+    void client
+      .from('integrations')
+      .update({ credentials_encrypted: encryptSecret(JSON.stringify(latest)) })
+      .eq('id', integrationId)
+      .then(({ error }: { error: { message: string } | null }) => {
+        if (error) {
+          logger.error('drive token refresh persistence failed', {
+            integration_id: integrationId,
+            error: error.message,
+          })
+        }
+      })
+  })
+}
+
+/**
+ * Builds a credentialed OAuth2 client for a Drive integration row, wired to
+ * persist any token refresh back to that row (docs/07 §3.3). Every call site
+ * that talks to Drive on a user's behalf should go through this rather than
+ * hand-rolling `buildGoogleOAuthClient()` + `setCredentials()`.
+ */
+export function driveOAuthClientFor(client: Client, row: IntegrationRow): OAuth2Client {
+  if (!row.credentials_encrypted) {
+    throw new Error('driveOAuthClientFor: integration row has no stored credentials')
+  }
+  const oauth2 = buildGoogleOAuthClient()
+  const credentials = JSON.parse(decryptSecret(row.credentials_encrypted)) as Record<
+    string,
+    unknown
+  >
+  oauth2.setCredentials(credentials)
+  attachTokenPersistence(oauth2, client, row.id, credentials)
+  return oauth2
 }

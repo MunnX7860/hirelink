@@ -22,6 +22,8 @@ const OPTIONAL = [
   'UPSTASH_REDIS_REST_TOKEN',
   'SENTRY_DSN',
   'CRON_SECRET',
+  'RESEND_WEBHOOK_SECRET',
+  'TELEGRAM_SHARED_BOT_TOKEN',
 ]
 
 if (!existsSync('.env.local')) {

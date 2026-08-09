@@ -1,6 +1,5 @@
 import { AppError, ErrorCode, handleRoute } from '@/lib/errors'
-import { decryptSecret } from '@/lib/crypto'
-import { getScopedIntegration, buildGoogleOAuthClient } from '@/lib/integrations/resolve'
+import { getScopedIntegration, driveOAuthClientFor } from '@/lib/integrations/resolve'
 import { listDriveFolders } from '@/lib/storage/google-drive'
 import { requireWorkspace } from '@/features/orgs/server'
 import { refForScope } from '@/features/orgs/scope'
@@ -18,8 +17,7 @@ export const GET = handleRoute(async () => {
     throw new AppError(ErrorCode.INTEGRATION_ERROR, 'Google Drive is not connected.')
   }
 
-  const oauth2 = buildGoogleOAuthClient()
-  oauth2.setCredentials(JSON.parse(decryptSecret(row.credentials_encrypted)))
+  const oauth2 = driveOAuthClientFor(supabase, row)
   try {
     const folders = await listDriveFolders(oauth2)
     return { data: folders }

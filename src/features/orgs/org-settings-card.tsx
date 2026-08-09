@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Card, CardHeader, CardTitle } from '@/ui/card'
 import { Button } from '@/ui/button'
 import { Input } from '@/ui/input'
+import { Select } from '@/ui/select'
 import { Badge } from '@/ui/badge'
 import { ConfirmModal } from '@/ui/modal'
 import { useToast } from '@/ui/toaster'
@@ -318,15 +319,16 @@ function CurrentOrgSection({
                 onChange={(e) => setInviteEmail(e.target.value)}
                 placeholder="teammate@example.com"
               />
-              <select
-                aria-label="Invite role"
+              <Select
+                label="Invite role"
+                hideLabel
                 value={inviteRole}
                 onChange={(e) => setInviteRole(e.target.value as 'admin' | 'member')}
-                className="h-11 rounded-lg border border-slate-300 bg-surface px-3 text-sm"
+                className="text-sm"
               >
                 <option value="member">member</option>
                 <option value="admin">admin</option>
-              </select>
+              </Select>
               <Button
                 variant="secondary"
                 size="md"

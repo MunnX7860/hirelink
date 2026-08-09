@@ -12,6 +12,8 @@ import {
   EDUCATION_LEVELS,
   EDUCATION_LABELS,
   QUESTION_TYPES,
+  sanitizeQuestions,
+  type PublicQuestionValue,
   type QuestionClassValue,
   type QuestionTypeValue,
   type QuestionValue,
@@ -93,6 +95,7 @@ export function QuestionnaireBuilder({
   const [saving, setSaving] = useState(false)
   const [recomputing, setRecomputing] = useState(false)
   const [addType, setAddType] = useState<QuestionTypeValue>('yes_no')
+  const [previewMode, setPreviewMode] = useState(false)
 
   const hasMandatory = questions.some((q) => q.classification === 'mandatory')
   const dirty = JSON.stringify(questions) !== JSON.stringify(initialQuestions)
@@ -177,12 +180,24 @@ export function QuestionnaireBuilder({
         )}
       </CardHeader>
 
-      <p className="mb-3 text-sm text-ink-secondary">
-        Applicants answer these on the apply page. <strong>Mandatory</strong> questions decide the
-        verdict (qualified / not qualified / needs review) — rules stay hidden from candidates.
-      </p>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-ink-secondary">
+          Applicants answer these on the apply page. <strong>Mandatory</strong> questions decide the
+          verdict (qualified / not qualified / needs review) — rules stay hidden from candidates.
+        </p>
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => setPreviewMode((v) => !v)}
+          aria-pressed={previewMode}
+        >
+          {previewMode ? '← Back to editor' : 'Preview: Candidate view'}
+        </Button>
+      </div>
 
-      {questions.length === 0 ? (
+      {previewMode ? (
+        <CandidatePreview questions={questions} />
+      ) : questions.length === 0 ? (
         <p className="mb-3 rounded-lg bg-surface-muted px-3 py-2 text-sm text-ink-secondary">
           No questions yet — the apply form only asks for resume and contact details.
         </p>
@@ -294,36 +309,40 @@ export function QuestionnaireBuilder({
         </ol>
       )}
 
-      <div className="flex flex-wrap items-end gap-2">
-        <label className="flex flex-col gap-1 text-sm text-ink">
-          Add question
-          <select
-            value={addType}
-            onChange={(e) => setAddType(e.target.value as QuestionTypeValue)}
-            disabled={saving}
-            className="h-11 rounded-lg border border-slate-300 bg-surface px-3 text-sm"
-          >
-            {QUESTION_TYPES.map((t) => (
-              <option key={t} value={t}>
-                {TYPE_LABELS[t]}
-              </option>
-            ))}
-          </select>
-        </label>
-        <Button
-          variant="secondary"
-          onClick={() => setQuestions((prev) => [...prev, defaultQuestion(addType)])}
-          disabled={saving || questions.length >= 20}
-        >
-          + Add
-        </Button>
-        <div className="flex-1" />
-        <Button onClick={save} loading={saving} disabled={!dirty}>
-          Save questionnaire
-        </Button>
-      </div>
-      {questions.length >= 20 ? (
-        <p className="mt-2 text-xs text-warning">20 questions max (docs/17 §3.3).</p>
+      {!previewMode ? (
+        <>
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="flex flex-col gap-1 text-sm text-ink">
+              Add question
+              <select
+                value={addType}
+                onChange={(e) => setAddType(e.target.value as QuestionTypeValue)}
+                disabled={saving}
+                className="h-11 rounded-lg border border-slate-300 bg-surface px-3 text-sm"
+              >
+                {QUESTION_TYPES.map((t) => (
+                  <option key={t} value={t}>
+                    {TYPE_LABELS[t]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <Button
+              variant="secondary"
+              onClick={() => setQuestions((prev) => [...prev, defaultQuestion(addType)])}
+              disabled={saving || questions.length >= 20}
+            >
+              + Add
+            </Button>
+            <div className="flex-1" />
+            <Button onClick={save} loading={saving} disabled={!dirty}>
+              Save questionnaire
+            </Button>
+          </div>
+          {questions.length >= 20 ? (
+            <p className="mt-2 text-xs text-warning">20 questions max (docs/17 §3.3).</p>
+          ) : null}
+        </>
       ) : null}
 
       {hasMandatory && !dirty ? (
@@ -338,6 +357,105 @@ export function QuestionnaireBuilder({
       ) : null}
     </Card>
   )
+}
+
+// ── Candidate view preview (docs/17 §12) ──────────────────────────────────────
+// Renders exactly what `sanitizeQuestions()` projects toward the public apply
+// page — proof that classification/rule never leak (17 §3.4 Q7 guarantee).
+
+function CandidatePreview({ questions }: { questions: QuestionValue[] }) {
+  const publicQuestions = sanitizeQuestions(questions)
+
+  if (publicQuestions.length === 0) {
+    return (
+      <p className="mb-3 rounded-lg bg-surface-muted px-3 py-2 text-sm text-ink-secondary">
+        No questions yet — candidates won&apos;t see a questionnaire on the apply form.
+      </p>
+    )
+  }
+
+  return (
+    <div className="mb-4 flex flex-col gap-4 rounded-xl border border-dashed border-slate-300 bg-surface-muted/40 p-3">
+      <p className="text-xs font-medium uppercase tracking-wide text-ink-secondary">
+        What candidates see on the apply page — no rules, no mandatory/preferred markers
+      </p>
+      {publicQuestions.map((q) => (
+        <div key={q.id} className="flex flex-col gap-1.5">
+          <label className="text-sm font-medium text-ink">
+            {q.required
+              ? q.label || '(untitled question)'
+              : `${q.label || '(untitled question)'} (optional)`}
+          </label>
+          <PreviewField question={q} />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+const PREVIEW_FIELD_CLASS =
+  'flex h-11 w-full items-center rounded-lg border border-slate-300 bg-surface px-3 text-sm text-ink-secondary'
+
+function PreviewField({ question }: { question: PublicQuestionValue }) {
+  switch (question.type) {
+    case 'yes_no':
+    case 'relocate':
+      return (
+        <div className="flex gap-2">
+          {['Yes', 'No'].map((opt) => (
+            <span
+              key={opt}
+              className="rounded-full border border-slate-300 px-3 py-1.5 text-sm text-ink-secondary"
+            >
+              {opt}
+            </span>
+          ))}
+        </div>
+      )
+    case 'single_choice':
+      return (
+        <div className="flex flex-wrap gap-2">
+          {(question.options ?? []).map((o, i) => (
+            <span
+              key={`${o}-${i}`}
+              className="rounded-full border border-slate-300 px-3 py-1.5 text-sm text-ink-secondary"
+            >
+              {o || '(empty option)'}
+            </span>
+          ))}
+        </div>
+      )
+    case 'multiple_choice':
+      return (
+        <div className="flex flex-wrap gap-2">
+          {(question.options ?? []).map((o, i) => (
+            <span
+              key={`${o}-${i}`}
+              className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-ink-secondary"
+            >
+              ☐ {o || '(empty option)'}
+            </span>
+          ))}
+        </div>
+      )
+    case 'dropdown':
+      return (
+        <div className={PREVIEW_FIELD_CLASS}>
+          Select… ({(question.options ?? []).length} options)
+        </div>
+      )
+    case 'education':
+      return <div className={PREVIEW_FIELD_CLASS}>Select…</div>
+    case 'number':
+    case 'experience_years':
+    case 'current_ctc':
+    case 'expected_ctc':
+      return <div className={PREVIEW_FIELD_CLASS}>0</div>
+    case 'text':
+    case 'location':
+    default:
+      return <div className={PREVIEW_FIELD_CLASS}>Candidate&apos;s answer</div>
+  }
 }
 
 // ── Rule editor (PRIVATE — 17 §3.4) ───────────────────────────────────────────

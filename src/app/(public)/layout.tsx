@@ -17,7 +17,9 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
       </header>
       <main className="flex-1">{children}</main>
       <footer className="p-4 text-center text-xs text-ink-secondary">
-        Your resume is stored securely by the employer.
+        <Link href="/privacy" className="underline hover:text-ink">
+          Your resume is stored securely by the employer.
+        </Link>
       </footer>
     </div>
   )

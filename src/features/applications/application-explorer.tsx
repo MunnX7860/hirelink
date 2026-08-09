@@ -5,6 +5,7 @@ import { api } from '@/lib/api-client'
 import { ApplicationCard } from '@/features/applications/application-card'
 import { BulkActionsBar } from '@/features/applications/bulk-actions-bar'
 import { IconSearch } from '@/ui/icons'
+import { Select } from '@/ui/select'
 import { cn } from '@/lib/utils'
 import { APPLICATION_STATUSES, type ApplicationStatusValue } from '@/features/applications/schemas'
 import type { ApplicationListItem } from '@/features/applications/server'
@@ -199,37 +200,37 @@ export function ApplicationExplorer({
       {showFilters ? (
         <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-200 bg-surface-muted p-3 sm:grid-cols-4">
           {!fixedJobId ? (
-            <label className="flex flex-col gap-1 text-xs font-medium text-ink-secondary">
-              Job
-              <select
-                value={filters.jobId}
-                onChange={(e) => setFilters((f) => ({ ...f, jobId: e.target.value }))}
-                className="h-10 rounded-lg border border-slate-300 bg-surface px-2 text-sm text-ink"
-              >
-                <option value="">All jobs</option>
-                {jobs.map((j) => (
-                  <option key={j.id} value={j.id}>
-                    {j.title}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : null}
-          <label className="flex flex-col gap-1 text-xs font-medium text-ink-secondary">
-            Tag
-            <select
-              value={filters.tagId}
-              onChange={(e) => setFilters((f) => ({ ...f, tagId: e.target.value }))}
-              className="h-10 rounded-lg border border-slate-300 bg-surface px-2 text-sm text-ink"
+            <Select
+              label="Job"
+              wrapperClassName="flex flex-col gap-1"
+              labelClassName="text-xs font-medium text-ink-secondary"
+              value={filters.jobId}
+              onChange={(e) => setFilters((f) => ({ ...f, jobId: e.target.value }))}
+              className="h-10 text-sm"
             >
-              <option value="">Any tag</option>
-              {tags.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
+              <option value="">All jobs</option>
+              {jobs.map((j) => (
+                <option key={j.id} value={j.id}>
+                  {j.title}
                 </option>
               ))}
-            </select>
-          </label>
+            </Select>
+          ) : null}
+          <Select
+            label="Tag"
+            wrapperClassName="flex flex-col gap-1"
+            labelClassName="text-xs font-medium text-ink-secondary"
+            value={filters.tagId}
+            onChange={(e) => setFilters((f) => ({ ...f, tagId: e.target.value }))}
+            className="h-10 text-sm"
+          >
+            <option value="">Any tag</option>
+            {tags.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </Select>
           <label className="flex flex-col gap-1 text-xs font-medium text-ink-secondary">
             From
             <input

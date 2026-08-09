@@ -1,0 +1,53 @@
+# weekly-integrations.yml — docs/12 §5, docs/13 Test Pyramid row 5.
+# Real Drive/Telegram/Resend contract tests (docs/07 §8, docs/08 §6, docs/09 §6)
+# — never per-PR, alert-only, secrets-gated. Each provider's suite self-skips
+# independently (e2e/weekly-integrations.spec.ts) so this is safe to enable one
+# provider at a time.
+name: weekly-integrations
+
+on:
+  schedule:
+    - cron: '0 6 * * 1' # Monday 06:00 UTC
+  workflow_dispatch: {} # manual trigger for on-demand contract checks
+
+env:
+  NEXT_PUBLIC_APP_URL: http://localhost:3000
+  NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-dummy-anon-key
+  SUPABASE_SERVICE_ROLE_KEY: ci-dummy-service-role-key
+  ENCRYPTION_SECRET: 0000000000000000000000000000000000000000000000000000000000000001
+  TELEGRAM_TEST_BOT_TOKEN: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
+  TELEGRAM_TEST_CHAT_ID: ${{ secrets.TELEGRAM_TEST_CHAT_ID }}
+  DRIVE_TEST_CLIENT_ID: ${{ secrets.DRIVE_TEST_CLIENT_ID }}
+  DRIVE_TEST_CLIENT_SECRET: ${{ secrets.DRIVE_TEST_CLIENT_SECRET }}
+  DRIVE_TEST_REFRESH_TOKEN: ${{ secrets.DRIVE_TEST_REFRESH_TOKEN }}
+  DRIVE_TEST_FOLDER_ID: ${{ secrets.DRIVE_TEST_FOLDER_ID }}
+  RESEND_TEST_TO: ${{ secrets.RESEND_TEST_TO }}
+
+jobs:
+  contract-tests:
+    runs-on: ubuntu-latest
+    # Real-provider RESEND_API_KEY (test-mode `re_test_…`) shadows the CI dummy
+    # only for this job — the app build itself still uses the simulated
+    # transport unless a real key is supplied.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Run real-provider contract tests
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_TEST_API_KEY }}
+        run: pnpm exec playwright test e2e/weekly-integrations.spec.ts
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: weekly-integrations-report
+          path: playwright-report/
+          retention-days: 14

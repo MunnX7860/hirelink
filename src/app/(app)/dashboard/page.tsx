@@ -84,6 +84,15 @@ export default async function InboxPage({
         inboxDefault={!jobScoped}
         fixedJobId={params.job_id}
       />
+
+      {/* FAB — docs/06 §4: context-aware primary create, "+ New Job on Jobs/Inbox" */}
+      <Link
+        href="/dashboard/jobs/new"
+        aria-label="New job"
+        className="fixed bottom-24 right-4 z-10 flex size-14 items-center justify-center rounded-full bg-brand text-white shadow-lg hover:bg-brand-hover lg:bottom-8"
+      >
+        <IconPlus className="size-7" />
+      </Link>
     </div>
   )
 }

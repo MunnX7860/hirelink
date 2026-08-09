@@ -8,9 +8,12 @@ import type { OAuth2Client } from 'google-auth-library'
 import type { StorageProvider, StoredFileMetadata } from '@/lib/storage/types'
 import { StorageProviderError } from '@/lib/storage/types'
 
+/** docs/07 §5: 30s per Drive API attempt (the retry-with-backoff half lives in the callers). */
+const DRIVE_TIMEOUT_MS = 30_000
+
 /**
  * Google Drive StorageProvider — docs/07. Scope `drive.file` only (D1);
- * OAuth grant + token lifecycle in lib/integrations/google-tokens.ts.
+ * OAuth grant + token lifecycle in lib/integrations/resolve.ts.
  */
 export class GoogleDriveStorage implements StorageProvider {
   private readonly drive: drive_v3.Drive
@@ -55,15 +58,18 @@ export class GoogleDriveStorage implements StorageProvider {
   /** Create (or locate) a child folder by exact name. Drive folders are non-unique; we key off cached ids in the DB. */
   private async ensureChildFolder(name: string, parentId: string): Promise<string> {
     try {
-      const created = await this.drive.files.create({
-        requestBody: {
-          name,
-          mimeType: 'application/vnd.google-apps.folder',
-          parents: [parentId],
+      const created = await this.drive.files.create(
+        {
+          requestBody: {
+            name,
+            mimeType: 'application/vnd.google-apps.folder',
+            parents: [parentId],
+          },
+          fields: 'id',
+          supportsAllDrives: false,
         },
-        fields: 'id',
-        supportsAllDrives: false,
-      })
+        { timeout: DRIVE_TIMEOUT_MS },
+      )
       const id = created.data.id
       if (!id) throw new Error('Drive did not return a folder id')
       return id
@@ -88,12 +94,15 @@ export class GoogleDriveStorage implements StorageProvider {
 
   async uploadFile(input: { folderId: string; filename: string; mime: string; data: Buffer }) {
     try {
-      const res = await this.drive.files.create({
-        requestBody: { name: sanitizeDriveName(input.filename, 120), parents: [input.folderId] },
-        media: { mimeType: input.mime, body: Readable.from(input.data) },
-        fields: 'id',
-        supportsAllDrives: false,
-      })
+      const res = await this.drive.files.create(
+        {
+          requestBody: { name: sanitizeDriveName(input.filename, 120), parents: [input.folderId] },
+          media: { mimeType: input.mime, body: Readable.from(input.data) },
+          fields: 'id',
+          supportsAllDrives: false,
+        },
+        { timeout: DRIVE_TIMEOUT_MS },
+      )
       const fileId = res.data.id
       if (!fileId) throw new Error('Drive did not return a file id')
       return { fileId }
@@ -105,10 +114,13 @@ export class GoogleDriveStorage implements StorageProvider {
   async downloadFile(fileId: string) {
     try {
       const [meta, media] = await Promise.all([
-        this.drive.files.get({ fileId, fields: 'name,mimeType', supportsAllDrives: false }),
+        this.drive.files.get(
+          { fileId, fields: 'name,mimeType', supportsAllDrives: false },
+          { timeout: DRIVE_TIMEOUT_MS },
+        ),
         this.drive.files.get(
           { fileId, alt: 'media', supportsAllDrives: false },
-          { responseType: 'arraybuffer' },
+          { responseType: 'arraybuffer', timeout: DRIVE_TIMEOUT_MS },
         ),
       ])
       return {
@@ -123,11 +135,10 @@ export class GoogleDriveStorage implements StorageProvider {
 
   async getFileMetadata(fileId: string): Promise<StoredFileMetadata> {
     try {
-      const res = await this.drive.files.get({
-        fileId,
-        fields: 'name,size',
-        supportsAllDrives: false,
-      })
+      const res = await this.drive.files.get(
+        { fileId, fields: 'name,size', supportsAllDrives: false },
+        { timeout: DRIVE_TIMEOUT_MS },
+      )
       return { name: res.data.name ?? 'file', size: Number(res.data.size ?? 0) }
     } catch (err) {
       this.wrap(err)
@@ -136,7 +147,10 @@ export class GoogleDriveStorage implements StorageProvider {
 
   async deleteFile(fileId: string): Promise<void> {
     try {
-      await this.drive.files.delete({ fileId, supportsAllDrives: false })
+      await this.drive.files.delete(
+        { fileId, supportsAllDrives: false },
+        { timeout: DRIVE_TIMEOUT_MS },
+      )
     } catch (err) {
       this.wrap(err)
     }
@@ -146,26 +160,32 @@ export class GoogleDriveStorage implements StorageProvider {
 /** List the user's own folders for the root picker (docs/07 §4). */
 export async function listDriveFolders(oauth2: OAuth2Client) {
   const client = drive({ version: 'v3', auth: oauth2 })
-  const res = await client.files.list({
-    q: "mimeType = 'application/vnd.google-apps.folder' and trashed = false",
-    fields: 'files(id, name)',
-    orderBy: 'name',
-    pageSize: 100,
-    spaces: 'drive',
-  })
+  const res = await client.files.list(
+    {
+      q: "mimeType = 'application/vnd.google-apps.folder' and trashed = false",
+      fields: 'files(id, name)',
+      orderBy: 'name',
+      pageSize: 100,
+      spaces: 'drive',
+    },
+    { timeout: DRIVE_TIMEOUT_MS },
+  )
   return (res.data.files ?? []).map((f) => ({ id: f.id as string, name: f.name as string }))
 }
 
 /** Create a brand root folder ("HireLink") and return its id. */
 export async function createDriveFolder(oauth2: OAuth2Client, name: string) {
   const client = drive({ version: 'v3', auth: oauth2 })
-  const res = await client.files.create({
-    requestBody: {
-      name: sanitizeDriveName(name, 80),
-      mimeType: 'application/vnd.google-apps.folder',
+  const res = await client.files.create(
+    {
+      requestBody: {
+        name: sanitizeDriveName(name, 80),
+        mimeType: 'application/vnd.google-apps.folder',
+      },
+      fields: 'id',
     },
-    fields: 'id',
-  })
+    { timeout: DRIVE_TIMEOUT_MS },
+  )
   if (!res.data.id) throw new Error('Drive did not return a folder id')
   return { id: res.data.id }
 }
