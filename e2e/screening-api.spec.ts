@@ -22,6 +22,9 @@ const SCREENING_ROUTES: Array<{ method: string; path: string; body?: unknown }> 
   },
   { method: 'GET', path: `/api/ai/screenings?job_id=${ID}` },
   { method: 'GET', path: `/api/ai/screenings/${ID}` },
+  // Stage 5.4 — async session actions (05 §4.10)
+  { method: 'POST', path: `/api/ai/screenings/${ID}/retry` },
+  { method: 'POST', path: `/api/ai/screenings/${ID}/cancel` },
 ]
 
 for (const route of SCREENING_ROUTES) {
@@ -38,6 +41,15 @@ for (const route of SCREENING_ROUTES) {
     expect(json.error.request_id).toBeTruthy()
   })
 }
+
+test('GET /api/cron/screening-worker is gated (404/401 without a valid bearer)', async ({
+  request,
+}) => {
+  // docs/17 §9.1 — worker secrecy mirrors the other crons: feature-gated 404
+  // when CRON_SECRET is unconfigured, else 401 on a missing/wrong bearer.
+  const res = await request.get('/api/cron/screening-worker')
+  expect([401, 404]).toContain(res.status())
+})
 
 test('PUBLIC job route stays public — and never leaks screening rules (Q7, 17 §3.4)', async ({
   request,

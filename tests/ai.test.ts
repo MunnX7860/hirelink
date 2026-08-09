@@ -482,3 +482,322 @@ describe('profile endpoint input + capabilities', () => {
     expect(AI_CAPABILITIES).toContain('profile_extract')
   })
 })
+
+// ── Stage 5.4 — Gemini Batch accelerator (docs/17 §9.2) ─────────────────────
+
+import {
+  BATCH_INLINE_MAX_BYTES,
+  buildBatchCreateBody,
+  estimateBatchBodyBytes,
+  makeBatchClient,
+  normalizeBatchResource,
+  parseBatchItemResult,
+} from '@/lib/ai/batch'
+
+interface BuiltBatchBody {
+  batch: {
+    display_name: string
+    input_config: {
+      requests: {
+        requests: Array<{
+          metadata: { key: string }
+          request: {
+            contents: Array<{ role: string; parts: Array<{ text: string }> }>
+            generationConfig: Record<string, unknown>
+          }
+        }>
+      }
+    }
+  }
+}
+
+describe('batch create body (docs/17 §9.2 — Batch REST shape verified 2026-08-09)', () => {
+  it('nests per-item requests with metadata keys + structured-output config', () => {
+    const body = buildBatchCreateBody(
+      [
+        {
+          key: 'row-1',
+          request: {
+            prompt: 'screen candidate one',
+            temperature: 0.2,
+            maxOutputTokens: 64,
+            jsonSchema: { type: 'OBJECT' },
+          },
+        },
+        {
+          key: 'row-2',
+          request: { prompt: 'screen candidate two', temperature: 0.2, maxOutputTokens: 64 },
+        },
+      ],
+      'screening-test',
+    ) as unknown as BuiltBatchBody
+
+    expect(body.batch.display_name).toBe('screening-test')
+    const reqs = body.batch.input_config.requests.requests
+    expect(reqs).toHaveLength(2)
+    expect(reqs[0]!.metadata.key).toBe('row-1')
+    expect(reqs[1]!.metadata.key).toBe('row-2')
+    expect(reqs[0]!.request.contents[0]!.parts[0]!.text).toBe('screen candidate one')
+    expect(reqs[0]!.request.generationConfig.responseMimeType).toBe('application/json')
+    expect(reqs[0]!.request.generationConfig.responseSchema).toEqual({ type: 'OBJECT' })
+    // no per-item schema → no forced mime type
+    expect(reqs[1]!.request.generationConfig.responseMimeType).toBeUndefined()
+  })
+
+  it('byte guard estimate grows with items (fallback trigger before POSTing)', () => {
+    const small = buildBatchCreateBody(
+      [{ key: 'k', request: { prompt: 'x', temperature: 0.2, maxOutputTokens: 8 } }],
+      'd',
+    )
+    expect(estimateBatchBodyBytes(small)).toBeGreaterThan(100)
+    expect(estimateBatchBodyBytes(small)).toBeLessThan(BATCH_INLINE_MAX_BYTES)
+  })
+})
+
+describe('batch client (fake transport — 17 §9.2)', () => {
+  const KEY = 'secret-batch-key'
+  function json(payload: unknown, status = 200): Response {
+    return new Response(JSON.stringify(payload), {
+      status,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+  function capturing(responder: (url: string) => Response) {
+    const calls: Array<{ url: string; init: RequestInit | undefined }> = []
+    const fetchImpl = async (input: string, init?: RequestInit) => {
+      const url = String(input)
+      calls.push({ url, init })
+      return responder(url)
+    }
+    return { calls, fetchImpl }
+  }
+  const item = { key: 'r1', request: { prompt: 'p', temperature: 0.2, maxOutputTokens: 16 } }
+
+  it('createBatch posts to :batchGenerateContent — key in the HEADER, never the URL (10 §1)', async () => {
+    const { calls, fetchImpl } = capturing(() => json({ name: 'batches/abc' }))
+    const client = makeBatchClient({ apiKey: KEY, fetchImpl })
+    const res = await client.createBatch([item], 'screening-12345678')
+    expect(res).toEqual({ ok: true, name: 'batches/abc' })
+    const url = calls[0]!.url
+    expect(url).toContain('/models/gemini-2.0-flash:batchGenerateContent')
+    expect(url).not.toContain(KEY)
+    expect((calls[0]!.init!.headers as Record<string, string>)['x-goog-api-key']).toBe(KEY)
+  })
+
+  it('rejected key (401/403) → integrationBroken so the integration banner flips', async () => {
+    const client = makeBatchClient({
+      apiKey: KEY,
+      fetchImpl: capturing(() => json({ error: { message: 'API key not valid' } }, 401)).fetchImpl,
+    })
+    const res = await client.createBatch([item], 'd')
+    expect(res.ok).toBe(false)
+    if (!res.ok) {
+      expect(res.code).toBe('ai_key_rejected')
+      expect(res.integrationBroken).toBe(true)
+      expect(res.retryable).toBe(false)
+    }
+  })
+
+  it('400-class → ai_batch_unsupported (the interactive-engine fallback signal)', async () => {
+    const client = makeBatchClient({
+      apiKey: KEY,
+      fetchImpl: capturing(() => json({ error: { message: 'model does not support batch' } }, 400))
+        .fetchImpl,
+    })
+    const res = await client.createBatch([item], 'd')
+    expect(res.ok).toBe(false)
+    if (!res.ok) {
+      expect(res.code).toBe('ai_batch_unsupported')
+      expect(res.retryable).toBe(false)
+      expect(res.integrationBroken).toBe(false)
+    }
+  })
+
+  it('429/5xx/network are retryable (session keeps the batch, next tick repolls)', async () => {
+    const limited = makeBatchClient({
+      apiKey: KEY,
+      fetchImpl: capturing(() => json({ error: { message: 'quota' } }, 429)).fetchImpl,
+    })
+    const r429 = await limited.pollBatch('batches/abc')
+    expect(r429.ok).toBe(false)
+    if (!r429.ok) expect(r429.retryable).toBe(true)
+
+    const downed = makeBatchClient({
+      apiKey: KEY,
+      fetchImpl: capturing(() => json({ error: { message: 'boom' } }, 503)).fetchImpl,
+    })
+    const r503 = await downed.pollBatch('batches/abc')
+    expect(r503.ok).toBe(false)
+    if (!r503.ok) expect(r503.retryable).toBe(true)
+
+    const offline = makeBatchClient({
+      apiKey: KEY,
+      fetchImpl: async () => {
+        throw new Error('socket hang up')
+      },
+    })
+    const rNet = await offline.pollBatch('batches/abc')
+    expect(rNet.ok).toBe(false)
+    if (!rNet.ok) {
+      expect(rNet.code).toBe('ai_network')
+      expect(rNet.retryable).toBe(true)
+    }
+  })
+
+  it('running batch → counters for the 127/500-style progress bar (metadata.state shape)', async () => {
+    const client = makeBatchClient({
+      apiKey: KEY,
+      fetchImpl: capturing(() =>
+        json({
+          name: 'batches/abc',
+          metadata: {
+            state: 'JOB_STATE_RUNNING',
+            batchStats: { successCount: '127', failedCount: '3' },
+          },
+        }),
+      ).fetchImpl,
+    })
+    const res = await client.pollBatch('batches/abc')
+    expect(res).toEqual({ ok: true, done: false, succeededCount: 127, failedCount: 3 })
+  })
+
+  it('succeeded batch (newer state + dest.inlinedResponses shape) → keyed response texts', async () => {
+    const client = makeBatchClient({
+      apiKey: KEY,
+      fetchImpl: capturing(() =>
+        json({
+          name: 'batches/abc',
+          state: 'JOB_STATE_SUCCEEDED',
+          dest: {
+            inlinedResponses: [
+              {
+                metadata: { key: 'row-9' },
+                response: {
+                  candidates: [
+                    {
+                      content: {
+                        parts: [
+                          { text: '{"category":"strong_match", ' },
+                          { text: '"candidate":"C1"}' },
+                        ],
+                      },
+                    },
+                  ],
+                },
+              },
+              { metadata: { key: 'row-12' }, error: { message: 'item blew up' } },
+            ],
+          },
+        }),
+      ).fetchImpl,
+    })
+    const res = await client.pollBatch('batches/abc')
+    expect(res.ok).toBe(true)
+    if (res.ok && res.done) {
+      expect(res.succeeded).toBe(true)
+      expect(res.responses).toEqual([
+        { key: 'row-9', text: '{"category":"strong_match", "candidate":"C1"}' },
+        { key: 'row-12', text: null },
+      ])
+    } else {
+      expect.unreachable()
+    }
+  })
+
+  it('FAILED batch → done with succeeded:false (rows stay pending for the fallback)', async () => {
+    const client = makeBatchClient({
+      apiKey: KEY,
+      fetchImpl: capturing(() =>
+        json({ name: 'batches/abc', metadata: { state: 'JOB_STATE_FAILED' } }),
+      ).fetchImpl,
+    })
+    const res = await client.pollBatch('batches/abc')
+    expect(res.ok).toBe(true)
+    if (res.ok && res.done) expect(res.succeeded).toBe(false)
+    else expect.unreachable()
+  })
+
+  it('cancelBatch is fire-and-forget — never throws across the seam (D4)', async () => {
+    const client = makeBatchClient({
+      apiKey: KEY,
+      fetchImpl: async () => {
+        throw new Error('offline')
+      },
+    })
+    await expect(client.cancelBatch('batches/abc')).resolves.toBeUndefined()
+  })
+})
+
+describe('normalizeBatchResource (both documented REST surface variants)', () => {
+  it('defaults to PENDING on an empty resource and tolerates numeric-or-string stats', () => {
+    const norm = normalizeBatchResource({})
+    expect(norm).toMatchObject({ state: 'JOB_STATE_PENDING', done: false, succeeded: false })
+    const running = normalizeBatchResource({
+      metadata: {
+        state: 'JOB_STATE_RUNNING',
+        batchStats: { succeededRequestCount: 42, failedRequestCount: '2' },
+      },
+    })
+    expect(running).toMatchObject({ done: false, succeededCount: 42, failedCount: 2 })
+  })
+
+  it('EXPIRED/CANCELLED are done-but-not-succeeded (interactive fallback, §9.3)', () => {
+    for (const state of ['JOB_STATE_EXPIRED', 'JOB_STATE_CANCELLED']) {
+      const norm = normalizeBatchResource({ state })
+      expect(norm.done).toBe(true)
+      expect(norm.succeeded).toBe(false)
+    }
+  })
+})
+
+describe('parseBatchItemResult (17 §8 safe rails on per-candidate items)', () => {
+  it('parses a clean verdict and strips the advisory label', () => {
+    const core = parseBatchItemResult(
+      JSON.stringify({
+        candidate: 'C1',
+        category: 'strong_match',
+        rank: 1,
+        score: 88,
+        reasons: ['ICU experience stated'],
+        evidence: ['resume: 4y NICU'],
+        uncertainties: [],
+      }),
+    )
+    expect(core).toEqual({
+      category: 'strong_match',
+      rank: 1,
+      score: 88,
+      reasons: ['ICU experience stated'],
+      evidence: ['resume: 4y NICU'],
+      uncertainties: [],
+    })
+  })
+
+  it('heals a deviant label — the metadata key is the correlation (§8.2.0)', () => {
+    const core = parseBatchItemResult(
+      JSON.stringify({ candidate: 'Candidate One', category: 'possible_match' }),
+    )
+    expect(core).not.toBeNull()
+    expect(core!.category).toBe('possible_match')
+  })
+
+  it('unknown category rides the safe rail → review_required (never fabricated negative)', () => {
+    const core = parseBatchItemResult(
+      JSON.stringify({ candidate: 'C1', category: 'amazing_hire', score: 500 }),
+    )
+    expect(core).not.toBeNull()
+    expect(core!.category).toBe('review_required')
+    expect(core!.score).toBe(100) // clamped, not dropped
+  })
+
+  it('returns null for unparseable/non-object text so the row fails actionable', () => {
+    expect(parseBatchItemResult('not json at all')).toBeNull()
+    expect(parseBatchItemResult('[1,2,3]')).toBeNull()
+  })
+
+  it('even a non-string category rides the rail → review_required, never null-out', () => {
+    const core = parseBatchItemResult('{"category":123}')
+    expect(core).not.toBeNull()
+    expect(core!.category).toBe('review_required')
+  })
+})

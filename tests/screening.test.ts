@@ -554,16 +554,24 @@ describe('migration 0007 SQL sanity (docs/13 §Phase-5 — static checks)', () =
 
 import { buildScreenCandidatesPrompt, PROMPT_VERSIONS as PV } from '@/lib/ai/prompts'
 import {
+  BATCH_POOL_THRESHOLD,
+  CLAIM_EXPIRY_MS,
   CreateSessionInput,
   DisplayResultRow,
+  QUOTA_COOLDOWN_MS,
   SCREENING_POOLS,
+  SCREENING_RESULT_JSON_SCHEMA,
   SCREEN_CHUNK_SIZE,
   ScreeningChunkOutput,
   ScreeningResultSchema,
+  canCancelSession,
+  canRetrySession,
   describeRule,
   groupResultsForDisplay,
   isActiveSessionStatus,
+  isLeaseClaimable,
   poolApplicationsFilter,
+  shouldUpgradeToBatch,
 } from '@/features/screening/session-schemas'
 
 describe('CreateSessionInput (05 §4.10)', () => {
@@ -849,5 +857,83 @@ describe('screen_candidates prompt (17 §8.2 non-negotiables)', () => {
     expect(p).toContain('Job: "ICU Nurse"')
     expect(p).toContain('requires: answer must be Yes')
     expect(p).toContain('"night-shift friendly, ACLS certified"')
+  })
+})
+
+describe('stage 5.4 async guards (docs/17 §9 — lease, cooldown, batch gate)', () => {
+  const NOW = 1_800_000_000_000
+  const iso = (ms: number) => new Date(ms).toISOString()
+
+  it('unlocked active statuses are claimable; terminal statuses never are', () => {
+    for (const s of ['queued', 'processing', 'quota_limited']) {
+      expect(isLeaseClaimable(s, null, NOW)).toBe(true)
+    }
+    for (const s of ['completed', 'failed', 'cancelled']) {
+      expect(isLeaseClaimable(s, null, NOW)).toBe(false)
+      // even an ancient lock must not resurrect a terminal session
+      expect(isLeaseClaimable(s, iso(NOW - 60 * 60_000), NOW)).toBe(false)
+    }
+  })
+
+  it('a fresh lock blocks other advancers; an expired lease is reclaimed (§9.1)', () => {
+    for (const s of ['queued', 'processing']) {
+      expect(isLeaseClaimable(s, iso(NOW - 9 * 60_000), NOW)).toBe(false)
+      expect(isLeaseClaimable(s, iso(NOW - CLAIM_EXPIRY_MS - 60_000), NOW)).toBe(true)
+    }
+  })
+
+  it('quota_limited resumes after the SHORT cooldown, not the full lease (§9.2)', () => {
+    expect(isLeaseClaimable('quota_limited', iso(NOW - 1 * 60_000), NOW)).toBe(false)
+    expect(isLeaseClaimable('quota_limited', iso(NOW - QUOTA_COOLDOWN_MS - 30_000), NOW)).toBe(true)
+    // cooldown must stay well under the crash-reclaim window (progress > patience)
+    expect(QUOTA_COOLDOWN_MS).toBeLessThan(CLAIM_EXPIRY_MS)
+  })
+
+  it('unparseable lock timestamps never deadlock a session', () => {
+    expect(isLeaseClaimable('processing', 'not-a-date', NOW)).toBe(true)
+  })
+
+  it('canRetrySession gates terminal-only; canCancelSession gates in-flight-only (05 §4.10)', () => {
+    for (const s of ['completed', 'failed', 'cancelled']) expect(canRetrySession(s)).toBe(true)
+    for (const s of ['queued', 'processing', 'quota_limited'])
+      expect(canRetrySession(s)).toBe(false)
+    for (const s of ['queued', 'processing', 'quota_limited'])
+      expect(canCancelSession(s)).toBe(true)
+    for (const s of ['completed', 'failed', 'cancelled']) expect(canCancelSession(s)).toBe(false)
+  })
+
+  it('shouldUpgradeToBatch: batch-worthy only below the threshold check + never re-upgrade', () => {
+    expect(shouldUpgradeToBatch('interactive', BATCH_POOL_THRESHOLD)).toBe(true)
+    expect(shouldUpgradeToBatch('interactive', BATCH_POOL_THRESHOLD - 1)).toBe(false)
+    expect(shouldUpgradeToBatch('batch', 10_000)).toBe(false) // already accelerated
+  })
+
+  it('SCREENING_RESULT_JSON_SCHEMA mirrors the single-result contract (17 §8)', () => {
+    expect(SCREENING_RESULT_JSON_SCHEMA.type).toBe('OBJECT')
+    const props = SCREENING_RESULT_JSON_SCHEMA.properties as Record<string, Record<string, unknown>>
+    expect(props.rank).toMatchObject({ type: 'NUMBER', nullable: true })
+    expect(props.score).toMatchObject({ type: 'NUMBER', nullable: true })
+    expect(props.category?.enum).toEqual([
+      'strong_match',
+      'possible_match',
+      'review_required',
+      'lower_priority',
+    ])
+    expect(SCREENING_RESULT_JSON_SCHEMA.required).toEqual(['candidate', 'category'])
+  })
+})
+
+describe('migration 0008 SQL sanity (docs/13 §Phase-5 — static checks)', () => {
+  const sql = readFileSync('supabase/migrations/0008_phase5_screening_async.sql', 'utf8')
+
+  it('adds the processing lease column (17 §9.1)', () => {
+    expect(sql).toMatch(
+      /alter table public\.ai_screening_sessions\s+add column if not exists locked_at timestamptz/i,
+    )
+  })
+
+  it('creates the partial worker-selection index over active statuses only', () => {
+    expect(sql).toMatch(/create index if not exists screening_sessions_active_idx/i)
+    expect(sql).toMatch(/where status in \('queued', 'processing', 'quota_limited'\)/i)
   })
 })
