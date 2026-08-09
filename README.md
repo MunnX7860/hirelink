@@ -3,7 +3,7 @@
 **The simplest mobile-first hiring and talent CRM for businesses hiring through social media.**
 Create a hiring link → share it anywhere → applicants flow in with resumes organised in your own Google Drive, Telegram alerts for you, confirmation emails for them.
 
-> Working title. Phases: **0 Foundation → 1 Personal Hiring Tool → 2 Talent CRM → 3 BYOK AI → 4 SaaS** (see `docs/15_Project_Roadmap.md`).
+> Working title. Phases: **0 Foundation → 1 Personal Hiring Tool → 2 Talent CRM → 3 BYOK AI → 4 SaaS → 5 Smart Screening** (see `docs/15_Project_Roadmap.md`).
 
 ## Status
 
@@ -14,6 +14,7 @@ Create a hiring link → share it anywhere → applicants flow in with resumes o
 🟢 **Phase 3 — AI (BYOK)** (2026-08-08): optional Gemini key (paste → verify → encrypted store, masked hint, instant revoke), resume parsing (`ParsedResume` contract, cached), candidate snapshots (≤120 words + strengths, cached + regenerate, journaled), JD draft assist, social post generator; versioned prompts with injection/hallucination/neutrality guardrails; full degradation matrix (400 without key, 429 friendly, key-rejected banner; core always works). Gates green (109 unit / 29 always-on e2e / DB-gated A1–A4 degradation).
 
 🟢 **Phase 4 — SaaS · v1.0.0** (2026-08-08): multi-tenant organizations with roles (owner/admin/member) + hashed-link invites, workspace switcher (personal ⇄ org scopes everywhere), plan limits free/pro/team (402 `PLAN_LIMIT`), org-first integrations (shared Telegram bot, org Drive, org AI key) with labelled personal fallback, apply-page branding (custom for pro/team, else "via HireLink"), job moves between workspaces, soft-delete with 7-day re-home purge cron, additive zero-data-movement migration `0006`. Gates green (**184 unit / 48 always-on e2e** incl. the org 401 matrix; cross-tenant X1–X10 + 0006 staging rehearsal run against a live Supabase — see `docs/12_Deployment_Guide.md`).
+🟢 **Phase 5 — Smart Screening · v1.2.0** (2026-08-09): screening questionnaires with deterministic verdicts (QUALIFIED / DOES-NOT-MEET-MANDATORY / REVIEW-REQUIRED — ambiguity always to a human, never auto-rejected), AI screening sessions over snapshotted pools with evidence-backed reasons and INSUFFICIENT_EVIDENCE gaps, async large-pool processing (CAS lease + per-minute cron worker + advance-on-view, Gemini Batch accelerator ≥50 with seamless interactive fallback), partial-failure retry/cancel, immutable Drive summary artifacts. AI strictly optional — every non-AI path works with zero key; pipeline statuses stay 100 % human. Gates green (**348 unit / 61 always-on e2e**); S1–S10 live journeys incl. the 500-candidate S10 scale gate run on staging via `scripts/seed-screening.mjs`.
 
 ## Docs (read these first)
 
