@@ -28,6 +28,7 @@ import {
   writeSingleResult,
 } from '@/features/screening/packing'
 import type { SessionJobContext } from '@/features/screening/sessions'
+import { writeScreeningSummaryArtifact } from '@/features/screening/summary-artifact'
 
 /**
  * Gemini Batch accelerator (docs/17 §9.2) — for pools ≥ BATCH_POOL_THRESHOLD
@@ -284,5 +285,7 @@ export async function tickBatchSession(
     completed_at: new Date().toISOString(),
     locked_at: null,
   })
+  // 17 §13: immutable Drive summary artifact (write-once, D4-absorbed inside).
+  await writeScreeningSummaryArtifact(client, scope, sessionId)
   return 'completed'
 }

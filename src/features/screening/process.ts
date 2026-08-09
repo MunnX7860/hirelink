@@ -25,6 +25,7 @@ import {
   type PendingRow,
 } from '@/features/screening/packing'
 import { tickBatchSession, tryUpgradeToBatch } from '@/features/screening/batch-session'
+import { writeScreeningSummaryArtifact } from '@/features/screening/summary-artifact'
 
 /**
  * Screening session processor (docs/17 §9.1–§9.3) — the DB-state-machine
@@ -293,6 +294,8 @@ export async function processScreeningSession(
       completed_at: new Date().toISOString(),
       locked_at: null,
     })
+    // 17 §13: immutable Drive summary artifact (write-once, D4-absorbed inside).
+    await writeScreeningSummaryArtifact(client, scope, sessionId)
     return { remaining: 0 }
   }
   if (sliceOver) await releaseSession(client, sessionId) // immediate handoff to the next ticker

@@ -81,6 +81,11 @@ export class GoogleDriveStorage implements StorageProvider {
     return { folderId: folder }
   }
 
+  async ensureFolder(name: string, parentId: string) {
+    const folderId = await this.ensureChildFolder(sanitizeDriveName(name, 80), parentId)
+    return { folderId }
+  }
+
   async uploadFile(input: { folderId: string; filename: string; mime: string; data: Buffer }) {
     try {
       const res = await this.drive.files.create({
