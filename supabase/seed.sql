@@ -1,0 +1,11 @@
+-- seed.sql — LOCAL DEV ONLY (never run in prod; docs/04 §7).
+-- Runs automatically on `supabase db reset`. Demo rows can't be created here because
+-- public.users rows require a real auth.users identity. Instead:
+--
+--   1) `supabase start` + `pnpm dev`
+--   2) Sign in with Google (docs/12 §3) — the 0004 trigger creates your public.users row
+--   3) Then run `supabase/seed_demo.sql` against your user id if you want sample data:
+--        psql $DB_URL -v owner="'<your-user-uuid>'" -f supabase/seed_demo.sql
+--
+-- Intentionally a no-op so `supabase db reset` stays green on a fresh clone.
+select 'seed: no-op (sign in first — see comments in supabase/seed.sql)' as note;

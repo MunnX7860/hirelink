@@ -1,0 +1,21 @@
+0 verbose cli /usr/bin/node /usr/lib/node_modules/npm/bin/npm-cli.js
+1 info using npm@10.8.2
+2 info using node@v20.20.2
+3 silly config load:file:/usr/lib/node_modules/npm/npmrc
+4 silly config load:file:/home/user/.npmrc
+5 silly config load:file:/usr/etc/npmrc
+6 verbose title npm exec prettier --check docs/ CHANGELOG.md
+7 verbose argv "exec" "--" "prettier" "--check" "docs/" "CHANGELOG.md"
+8 verbose logfile logs-max:10 dir:/home/user/.npm/_logs/2026-08-09T00_25_34_368Z-
+9 verbose logfile /home/user/.npm/_logs/2026-08-09T00_25_34_368Z-debug-0.log
+10 silly logfile done cleaning log files
+11 silly packumentCache heap:998768640 maxSize:249692160 maxEntrySize:124846080
+12 http fetch GET 200 https://registry.npmjs.org/prettier 105ms (cache revalidated)
+13 silly packumentCache heap:998768640 maxSize:249692160 maxEntrySize:124846080
+14 silly packumentCache heap:998768640 maxSize:249692160 maxEntrySize:124846080
+15 verbose cwd /home/user
+16 verbose os Linux 6.1.158+
+17 verbose node v20.20.2
+18 verbose npm  v10.8.2
+19 verbose exit 0
+20 info ok

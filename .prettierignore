@@ -1,0 +1,14 @@
+node_modules
+.next
+out
+playwright-report
+test-results
+.cache/
+pnpm-lock.yaml
+.cache/**
+package-lock.json
+*.md
+!docs/*.md
+
+# sandbox/host artifacts
+.config/

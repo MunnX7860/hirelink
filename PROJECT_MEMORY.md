@@ -1,0 +1,47 @@
+# Project Memory
+
+> Condensed, always-true context for AI coding sessions. Read this first; trust it over assumptions. Expanded specs live in `docs/00`–`docs/15` — cite section numbers when a rule matters. Update this file whenever architecture, status, or conventions change (14 §7).
+
+## What we're building
+**HireLink** (working title) — the simplest mobile-first hiring & talent CRM for businesses hiring through social media. Core loop: owner creates job → gets shareable link `/apply/{slug}` → applicants apply on mobile → resumes go to the **owner's own Google Drive** → owner gets **Telegram** ping → applicant gets **email**. Phases: 0 Foundation → 1 Personal Hiring Tool (MVP) → 2 Talent CRM → 3 BYOK AI → 4 SaaS multi-tenant.
+
+## Current state
+- **Phase 0 — Foundation COMPLETE (2026-08-07).** Scaffold + auth shell + migrations 0001–0004 + CI.
+- **Phase 1 — Personal Hiring Tool CODE COMPLETE (2026-08-08).** Full hiring loop; all offline gates green.
+- **Phase 3 — AI (BYOK) CODE COMPLETE (2026-08-08).** `lib/ai` seam + four AI features, BYOK Settings card, full degradation matrix. Gates: 109 unit + 29 always-on e2e.
+- **Phase 4 — SaaS CODE COMPLETE (2026-08-08) → v1.0.0.** Multi-tenant orgs live end-to-end (docs/11): workspace resolution cookie `hl_org` → `default_organization_id` → personal via `requireWorkspace()` (route-guard pattern that superseded `requireUser()`); orgs CRUD + soft-delete/restore + transfer; invites (sha256-hashed 7d tokens, `/invite/[token]` page, atomic `accept_org_invite` RPC w/ email-match + plan-mirrored seat cap); `lib/authz.ts` matrix (owner/admin/member; org-owner-only: branding/transfer/delete); `lib/plans.ts` (free 3/1/500 · pro 25/3/10k · team 100/25/50k) enforced as 402 `PLAN_LIMIT`; org-first integrations (`getScopedIntegration` → `{row, level}`) incl. Telegram shared bot (`TELEGRAM_SHARED_BOT_TOKEN`) + org Drive via `{org_id}` OAuth state; apply-page branding (custom for pro/team, "via HireLink" pill otherwise); job moves w/ exclusively-attached applicant re-scoping; org-first apply dedupe; `/api/cron/org-purge` 7-day re-home (04:00 UTC, second vercel.json cron); **migration 0006** (additive, re-runnable, zero data movement + guarded shell-org backfill; `scripts/backfill-orgs.mjs` standalone runner). Gates: **184 unit + 48 always-on e2e (19-route org 401 matrix) all green; X1–X10 cross-tenant suite DB-gated (self-skips without live Supabase, like seed-perf)**; build green, `/apply/[slug]` 3.56 kB. Remaining env-dependent: 0006 staging rehearsal + X-suite first green run (docs/12 checklist) — needs hosted Supabase.
+- Workspace: `docs/` = normative specs; `uploads/` = original skeletons (do not edit); root = app code.
+- Key entry points: apply orchestration `src/features/applications/server.ts`; jobs `src/features/jobs/server.ts`; providers `src/lib/{storage,notifications,integrations}`; public surface `src/app/(public)/apply/[slug]` + `src/app/api/apply/[slug]`.
+- Sandbox quirks (IMPORTANT, sessions reset): 1.9 GB RAM — run `sudo fallocate -l 3G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile` before builds (dropped between sessions); `.cache/` + `/usr` WIPED between sessions → reinstall `npx playwright install chromium` + `sudo npx playwright install-deps chromium` for e2e; typecheck needs `NODE_OPTIONS='--max-old-space-size=1280'`; no pnpm binary (npm used; CI uses pnpm); `.env.local` = documented dummies (health reports db:false without Supabase).
+- Build knobs in `next.config.ts`: serverExternalPackages(googleapis/google-auth-library/resend/react-email/upstash) + webpackBuildWorker:false + build skips lint/tsc (CI runs them) + webpack cache off. googleapis via SUBPATH imports only (`googleapis/build/src/apis/drive`, `google-auth-library`) — full-index imports OOM typecheck.
+
+## Locked decisions (D1–D8, details in docs/00 §9)
+1. Login = Supabase Auth (Google); Drive = **separate** incremental OAuth, scope `drive.file` only, offline refresh token.
+2. Files live in user-owned Google Drive; DB stores `storage_file_id`; **no public file URLs ever** — resumes stream via authed route.
+3. User credentials (Drive/Telegram/AI keys) = AES-256-GCM via `ENCRYPTION_SECRET`, format `v1.iv.tag.ct`, in `integrations.credentials_encrypted`. Write-only APIs.
+4. Notifications/Drive/AI failures **never block** submissions — degrade, write `timeline_events`, retry once, surface banner.
+5. Multi-tenancy active since v1.0.0: every owned table has `owner_id` + nullable `organization_id`; RLS everywhere (`current_org_role()` security-definer gates additive org policies); scopes personal-vs-org partition every read/write (personal = org IS NULL).
+6. Application statuses: `new, reviewing, shortlisted, interview, offered, hired, rejected, archived`. Job statuses: `draft, active, closed`.
+7. AI = BYOK only (user's Gemini key, `gemini-2.0-flash` default); every feature works with AI disabled.
+8. Apply endpoint: public, rate-limited (5/10min/IP via Upstash, env-gated), honeypot, idempotent on `(job_id, applicant_id)`; duplicates return success with `already_applied`.
+
+## Stack (locked, docs/03 §2)
+Next.js 15 App Router · React 19 · TS strict · Tailwind 4 · Supabase Postgres 15 (RLS) · Vercel · Resend (react-email) · Telegram Bot API · zod (shared schemas) · TanStack Query · react-hook-form · Vitest + Playwright · Node 20, pnpm.
+
+## Non-negotiable invariants
+- RLS on every table; service-role client only in: apply route, integration callbacks, cron, signed webhooks.
+- `process.env` read in `lib/env.ts` only; route handlers are thin (validate → service → shape); no SQL/SDK in `app/`.
+- Workspace-scoped endpoints: unknown-or-out-of-scope ID = 404 (no existence leaks); errors = `{ error: { code, message, details?, request_id } }`; 402 `PLAN_LIMIT` for plan caps (details `{limit_key, used, limit, plan}`); 409 `ALREADY_MEMBER`; 410 `INVITE_EXPIRED`.
+- Phase 4 architecture: scope filtering in services via `features/orgs/scope.ts` (`applyScope`, `jobEmbedFilters` (jobs!inner), `filterApplicationIdsInScope`, `refForScope`); timeline feed is a dual-branch JS merge (applicant!inner ∪ application→job!inner) with cursor on both; timeline events are written with `owner_id` = acting user (never data-owner) so RLS insert policies hold for members.
+- Resume uploads: pdf/doc/docx by magic bytes, ≤ 10 MB; idempotent per application.
+- Mobile-first (360px), one primary action per screen, tokens from docs/06 §2.
+- Conventional Commits; CHANGELOG every user-visible change; update THIS file on architecture shifts.
+
+## Key facts cheat-sheet
+- Env vars: `NEXT_PUBLIC_APP_URL`, `NEXT_PUBLIC_SUPABASE_URL/ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `GOOGLE_CLIENT_ID/SECRET`, `ENCRYPTION_SECRET` (64-hex), `RESEND_API_KEY`, `EMAIL_FROM`, `UPSTASH_*` (opt), `SENTRY_DSN` (opt), `CRON_SECRET` + `RESEND_WEBHOOK_SECRET` (Phase 2).
+- Drive layout: `{root}/Jobs/{Title}—{jobId[:8]}/{Name}—{applicantId[:8]}—file.pdf`; root = `integrations.config.root_folder_id`.
+- Telegram: per-owner BotFather bot (token encrypted, `config.chat_id`); message template + inline button in docs/08 §2.
+- Email catalogue: `application_received` (Phase 1), `owner_resume_failed`; `interview_invitation`/`rejection` = future; registry pattern docs/09 §2.
+- Migrations: `0001` extensions/enums → `0002` tables (org tables pre-created, "activated Phase 4") → `0003` indexes → `0004` RLS+trigger → `0005` app indexes+enum → `0006` Phase 4 org activation (invites, soft-delete, org indexes, helpers, additive org policies, shell-org backfill).
+- Perf budgets: apply page LCP ≤ 2.0s / ≤ 60KB JS; dashboard ≤ 2.5s / ≤ 120KB.
+- Working title only — rename before public launch.
