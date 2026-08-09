@@ -937,3 +937,162 @@ describe('migration 0008 SQL sanity (docs/13 §Phase-5 — static checks)', () =
     expect(sql).toMatch(/where status in \('queued', 'processing', 'quota_limited'\)/i)
   })
 })
+
+// ── Stage 5.5 — Drive summary artifact (docs/17 §13) ─────────────────────────
+
+import {
+  SCREENINGS_FOLDER_NAME,
+  SUMMARY_ARTIFACT_VERSION,
+  buildScreeningSummary,
+  summaryFilename,
+} from '@/features/screening/summary-artifact'
+
+describe('screening summary artifact contract (17 §13)', () => {
+  const SESSION = {
+    id: 'a1b2c3d4-0000-4000-8000-000000000000',
+    pool: 'qualified',
+    instruction: 'healthcare + SQL, nights ok',
+    max_results: 2,
+    provider: 'gemini',
+    model: 'gemini-2.0-flash',
+    prompt_version: 'screen_candidates.v1',
+    engine: 'interactive',
+    pool_size: 4,
+    processed: 3,
+    failed: 1,
+    created_at: '2026-08-08T10:00:00.000Z',
+    started_at: '2026-08-08T10:00:05.000Z',
+    completed_at: '2026-08-08T10:05:00.000Z',
+  }
+
+  function drow(partial: Partial<DisplayResultRow>): DisplayResultRow {
+    return {
+      applicationId: 'app-x',
+      applicantId: 'apl-x',
+      applicantName: 'Candidate X',
+      status: 'ok',
+      error: null,
+      category: 'possible_match',
+      rank: null,
+      score: null,
+      reasons: [],
+      evidence: [],
+      uncertainties: [],
+      ...partial,
+    }
+  }
+
+  it('filename follows screening-<date>-<shortid>.json verbatim', () => {
+    expect(summaryFilename('2026-08-09T16:30:00.000Z', SESSION.id)).toBe(
+      'screening-2026-08-09-a1b2c3d4.json',
+    )
+    expect(summaryFilename(new Date('2026-12-31T23:59:59Z'), SESSION.id)).toBe(
+      'screening-2026-12-31-a1b2c3d4.json',
+    )
+    expect(SCREENINGS_FOLDER_NAME).toBe('AI Screenings')
+  })
+
+  it('artifact shape is pinned (version, counts, session audit frozen on the row)', () => {
+    const rows = [
+      drow({
+        applicationId: 'app-strong',
+        applicantName: 'Asha',
+        category: 'strong_match',
+        rank: 1,
+        score: 92,
+      }),
+      drow({ applicationId: 'app-possible', applicantName: 'Ravi', rank: 2, score: 71 }),
+      drow({
+        applicationId: 'app-review',
+        applicantName: 'Meena',
+        category: 'review_required',
+        uncertainties: ['INSUFFICIENT_EVIDENCE: salary not stated'],
+      }),
+      drow({
+        applicationId: 'app-failed',
+        applicantName: 'Kabir',
+        status: 'failed',
+        category: null,
+        error: 'AI returned unreadable output',
+      }),
+    ]
+    const summary = buildScreeningSummary({
+      session: SESSION,
+      job: { id: 'job-1', title: 'ICU Nurse' },
+      rows,
+      createdByName: 'Owner One',
+      generatedAt: new Date('2026-08-09T17:00:00Z'),
+    })
+
+    expect(summary.artifact).toBe('hirelink/screening-summary')
+    expect(summary.version).toBe(SUMMARY_ARTIFACT_VERSION)
+    expect(summary.generated_at).toBe('2026-08-09T17:00:00.000Z')
+    expect(summary.job).toEqual({ id: 'job-1', title: 'ICU Nurse' })
+    expect(summary.session.created_by).toBe('Owner One')
+    expect(summary.session.instruction).toBe('healthcare + SQL, nights ok')
+    expect(summary.counts).toEqual({
+      pool_size: 4,
+      processed: 3,
+      failed: 1,
+      strong_match: 1,
+      possible_match: 1,
+      review_required: 1,
+      lower_priority: 0,
+    })
+  })
+
+  it('results respect top-N upper-bound display order; failed rows land last with error', () => {
+    const rows = [
+      drow({ applicationId: 'app-b1', category: 'strong_match', rank: 1, score: 90 }),
+      drow({ applicationId: 'app-b2', category: 'possible_match', rank: 2, score: 80 }),
+      drow({ applicationId: 'app-b3', category: 'possible_match', rank: 3, score: 70 }),
+      drow({ applicationId: 'app-f', status: 'failed', category: null, error: 'timeout' }),
+    ]
+    // max_results: 2 → third ranked row is "beyond top-N" but STILL PRESENT (never hidden)
+    const summary = buildScreeningSummary({
+      session: SESSION,
+      job: { id: 'job-1', title: 'ICU Nurse' },
+      rows,
+      createdByName: 'Owner One',
+    })
+    expect(summary.results.map((r) => r.application_id)).toEqual([
+      'app-b1',
+      'app-b2',
+      'app-b3',
+      'app-f',
+    ])
+    expect(summary.results[3]).toMatchObject({ status: 'failed', error: 'timeout', category: null })
+  })
+
+  it('INSUFFICIENT_EVIDENCE uncertainty markers are preserved verbatim (17 §8.1)', () => {
+    const summary = buildScreeningSummary({
+      session: SESSION,
+      job: { id: 'job-1', title: 'ICU Nurse' },
+      rows: [
+        drow({
+          applicationId: 'app-r',
+          category: 'review_required',
+          uncertainties: ['INSUFFICIENT_EVIDENCE: notice period missing'],
+        }),
+      ],
+      createdByName: 'Owner One',
+    })
+    expect(summary.results[0]!.uncertainties).toEqual([
+      'INSUFFICIENT_EVIDENCE: notice period missing',
+    ])
+  })
+})
+
+describe('migration 0009 SQL sanity (docs/13 §Phase-5 — static checks)', () => {
+  const sql = readFileSync('supabase/migrations/0009_phase5_screening_summary.sql', 'utf8')
+
+  it('adds the Drive artifact cache columns to the session row (17 §13)', () => {
+    expect(sql).toMatch(/alter table public\.ai_screening_sessions/i)
+    expect(sql).toMatch(/add column if not exists summary_folder_id text/i)
+    expect(sql).toMatch(/add column if not exists summary_file_id text/i)
+  })
+
+  it('is additive-only (no drops, no data movement)', () => {
+    expect(sql).not.toMatch(/drop table|drop column|alter column .* type/i)
+  })
+})
