@@ -76,7 +76,7 @@ Remaining before public launch: staging verification with real services (Supabas
 **Deliverable:** an agency runs 3 recruiters under one branded org. ✅
 **Exit criteria:** cross-tenant suite written (X1–X10, DB-gated — green-run pending live Supabase, same posture as seed-perf; gates: **184 unit + 48 always-on e2e** incl. 19-route org 401 matrix) · 0006 rehearsal on a staging dump pending (needs hosted Supabase — docs/12 checklist) · ✅ **v1.0.0**.
 
-## Phase 5 — Smart Screening _(est ≈ 2.0–3.0 DW)_ 🚧 in progress
+## Phase 5 — Smart Screening _(est ≈ 2.0–3.0 DW)_ ✅ shipped as v1.2.0 (2026-08-09) — S10 staging box in docs/12 owns the public "scale-ready" claim
 
 **Goal:** when a job receives 100s–1,000s of applications, screening stops being manual. User-requested feature (2026-08-09); normative spec **docs/17**.
 
@@ -87,7 +87,8 @@ Remaining before public launch: staging verification with real services (Supabas
 - **Resume profiles** (parse v2 cache via the existing Gemini adapter) ✅ spec'd ✅ built (5.2)
 - **AI Screening Sessions**: natural-language instruction on a snapshotted pool, top-N as an _upper bound_, per-candidate category + reasons + evidence + uncertainties (`INSUFFICIENT_EVIDENCE` vocabulary), async processing (DB state machine + cron/advance worker, Gemini Batch accelerator), partial-failure retry, append-only history ✅ spec'd ✅ built small-pool path (5.3) ✅ async worker + Batch + retry/cancel (5.4)
 - **Drive summary artifact** (17 §13): one immutable JSON summary per completed session in `{Job}/AI Screenings/` (files never moved; write-once; D4-absorbed) ✅ spec'd ✅ built (5.5)
-- Stages: 5.0 docs ✅ → 5.1 questionnaire+engine ✅ → 5.2 profiles ✅ → 5.3 sessions ✅ → 5.4 async ✅ → 5.5 results/Drive ✅ → 5.6 QA+scale gate
+- **QA + scale gate**: `scripts/seed-screening.mjs` (500-candidate deterministic probe), `e2e/screening.spec.ts` S1–S10 (S9/S10a key-free parts included), docs/17 §17 troubleshooting ✅ spec'd ✅ built (5.6) — _S10 pass on staging = the scale-ready checkbox (docs/12)_
+- Stages: 5.0 docs ✅ → 5.1 questionnaire+engine ✅ → 5.2 profiles ✅ → 5.3 sessions ✅ → 5.4 async ✅ → 5.5 results/Drive ✅ → 5.6 QA+scale gate ✅
 
 **Deliverable:** a recruiter screens a 500-application job: questionnaire splits the pool deterministically, then one AI session ("healthcare + SQL + Power BI, up to 50") returns an evidence-backed shortlist — recruiter decides everything.
 **Exit criteria:** all Phase 1–4 suites still green (AI off) · engine 100 % branch-covered · S1–S10 green on live Supabase incl. 500-candidate run (scale gate — no "scale-ready" claim without it, 17 §16) · CHANGELOG v1.2.0.

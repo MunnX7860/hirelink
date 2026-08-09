@@ -204,7 +204,21 @@ Verified 2026-08-09 against ai.google.dev (2.5-Flash free AI-Studio key): intera
 
 ## 16. Testing & acceptance (13 Phase-5 governs)
 
-Engine 100 % branch coverage; S1–S10 DB-gated journeys incl. injection neutralization, re-run safety, partial-failure retry, rule privacy leak check, and a 500-candidate pool exercise via `scripts/seed-screening.mjs`. **Exit gate: the 500-candidate run is demonstrated on a live Supabase (docs/12 checklist) before the feature is called scale-ready** (feature brief §21/§26) — offline gates green meanwhile, same posture as seed-perf.
+Engine 100 % branch coverage; S1–S10 DB-gated journeys incl. injection neutralization, re-run safety, partial-failure retry, rule privacy leak check, and a 500-candidate pool exercise via `scripts/seed-screening.mjs` (`e2e/screening.spec.ts` — S1–S3 + S9 + S10a run with the DB fixture alone; S4–S8 + S10b additionally need `E2E_WITH_AI=1` + `E2E_AI_API_KEY` + the app's `ENCRYPTION_SECRET`). **Exit gate: the 500-candidate run is demonstrated on a live Supabase (docs/12 checklist) before the feature is called scale-ready** (feature brief §21/§26) — offline gates green meanwhile, same posture as seed-perf.
+
+## 17. Troubleshooting (ops runbook)
+
+| Symptom                                                | Cause                                                          | Fix (safe order)                                                                                                                                       |
+| ------------------------------------------------------ | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Session `processing` forever, progress frozen          | advancer crashed / Hobby truncations; lease held               | Nothing — the 10-min lease expires and the next tick (cron/advance-on-view) resumes it. If it persists, open the session once (advance-on-view ticks). |
+| `quota paused` for a long time                         | Gemini 429 / free-tier RPD exhausted (17 §15)                  | Auto-resumes after the 2-min cooldown. If RPM-bound, wait for the minute; if RPD-bound, resume after the daily reset or switch to a paid key.          |
+| Session `failed` with the key banner                   | Gemini key rejected (rotated/revoked) (17 §9.3)                | Re-connect in Settings → AI, then **Retry** the session — pending rows resume, failed rows re-queue; completed rows are untouched.                     |
+| `Retry` returns 200 with `requeued: 0, resumed: 0`     | nothing left to redo (every row already has a verdict/failure) | Not an error — the honest no-op. Start a new session to re-screen the pool.                                                                            |
+| 400 `AI_NOT_CONFIGURED` on create                      | no active Gemini key in the current workspace                  | Settings → AI. Questionnaire screening keeps working meanwhile (17 §11).                                                                               |
+| "Summary in Drive" link missing on a completed session | Drive not connected / write hiccup (D4)                        | Optional artifact, §13 — reconnect Drive and future sessions will write it; write-once means past sessions are not backfilled.                         |
+| Batch badge never appears on a big run                 | pool < 50 pending or Batch create fell back (model/key/bytes)  | Expected — the interactive engine screens the same candidates either way; check logs for `staying interactive`.                                        |
+| Cron 404/401 on `/api/cron/screening-worker`           | `CRON_SECRET` unset (404) or wrong bearer (401)                | Set the secret (docs/12 §4), redeploy; on Hobby rely on advance-on-view (documented cadence row).                                                      |
+| Results groups look "too strict" (small shortlist)     | the standard is never lowered to fill top-N (§8.1)             | Review **beyond top-N** + review_required groups; humans always decide (§14).                                                                          |
 
 ## Decisions log (Phase 5)
 

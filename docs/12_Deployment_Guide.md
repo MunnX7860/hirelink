@@ -87,7 +87,7 @@ Vercel: preview deployments on PRs (env `preview`), production on `main` (env `p
 
 **Phase 5 (Smart Screening) additions:**
 
-- [ ] `0007` applied; RLS spot-check passes for `application_answers`, `applicant_profiles`, `ai_screening_sessions`, `ai_screening_results` (anon = zero rows)
+- [ ] `0007`–`0009` applied; RLS spot-check passes for `application_answers`, `applicant_profiles`, `ai_screening_sessions`, `ai_screening_results` (anon = zero rows)
 - [ ] **Screening worker cadence:** `*/1 * * * *` cron on `/api/cron/screening-worker` (paid Vercel plan — 1-min crons). Hobby plan: worker relies on advance-on-view (17 §9.1) — acceptable default, note in runbook; never claim live-processing SLAs there
 - [ ] S-suite green on staging with a **real Gemini key** incl. S10 (500-candidate pool via `scripts/seed-screening.mjs`) — the scale gate (13 Phase-5)
 - [ ] Gemini free-tier reality check re-read from the official docs before launch (17 §15: interactive ≈ 15 RPM / 250 RPD at last verification — Google has cut these without notice; copy uses "typically minutes–about an hour" for big pools)
