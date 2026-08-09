@@ -4,6 +4,7 @@ import { notFound, redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { getJob, getJobStats } from '@/features/jobs/server'
 import { listApplications } from '@/features/applications/server'
+import { getJobScreeningCounters } from '@/features/screening/sessions'
 import { Card } from '@/ui/card'
 import { StatusPill } from '@/ui/status-pill'
 import { ApplicationCard } from '@/features/applications/application-card'
@@ -33,11 +34,12 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
   const job = await getJob(supabase, scope, id)
   if (!job) notFound()
 
-  const [byStatus, recent, ai, memberships] = await Promise.all([
+  const [byStatus, recent, ai, memberships, screeningCounters] = await Promise.all([
     getJobStats(supabase, job.id),
     listApplications(supabase, scope, { job_id: job.id, status: undefined, limit: 5 }),
     getScopedIntegration(supabase, refForScope(scope), 'ai'),
     getMemberships(supabase, user.id),
+    getJobScreeningCounters(supabase, scope, job.id),
   ])
   const total = Object.values(byStatus).reduce((a, b) => a + b, 0)
   const applyUrl = `${env.NEXT_PUBLIC_APP_URL}/apply/${job.slug}`
@@ -96,6 +98,39 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
             <span className="text-lg font-bold text-ink">{total}</span>
             <span className="text-[11px] uppercase tracking-wide text-ink-secondary">total</span>
           </div>
+        </div>
+      </Card>
+
+      {/* Screening tab beside Pipeline (17 §12) */}
+      <Card>
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-base font-semibold text-ink">Screening</h2>
+          <Link
+            href={`/dashboard/jobs/${job.id}/screening`}
+            className="text-sm font-medium text-brand hover:underline"
+          >
+            Open screening →
+          </Link>
+        </div>
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {(
+            [
+              ['Qualified', screeningCounters?.qualified ?? 0],
+              ['Needs review', screeningCounters?.review_required ?? 0],
+              ['DNMC', screeningCounters?.does_not_meet_mandatory ?? 0],
+              ['Unscreened', screeningCounters?.unscreened ?? 0],
+            ] as const
+          ).map(([label, value]) => (
+            <div
+              key={label}
+              className="flex min-w-20 flex-col items-center rounded-lg bg-surface-muted px-3 py-2"
+            >
+              <span className="text-lg font-bold text-ink">{value}</span>
+              <span className="text-[11px] uppercase tracking-wide text-ink-secondary">
+                {label}
+              </span>
+            </div>
+          ))}
         </div>
       </Card>
 

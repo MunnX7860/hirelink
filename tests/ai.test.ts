@@ -256,6 +256,7 @@ describe('prompt injection guard (docs/10 §5 — fixture must be neutralised)',
     expect(PROMPT_VERSIONS).toEqual({
       resume_parse: 'v1',
       profile_extract: 'v1',
+      screen_candidates: 'v1',
       summarize_candidate: 'v1',
       job_description: 'v1',
       social_post: 'v1',

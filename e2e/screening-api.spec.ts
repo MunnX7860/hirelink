@@ -14,6 +14,14 @@ const SCREENING_ROUTES: Array<{ method: string; path: string; body?: unknown }> 
   { method: 'PUT', path: `/api/jobs/${ID}/screening-config`, body: { questions: [] } },
   { method: 'POST', path: `/api/jobs/${ID}/screening-recompute` },
   { method: 'GET', path: `/api/applications/${ID}/answers` },
+  // Stage 5.3 — AI screening sessions (05 §4.10)
+  {
+    method: 'POST',
+    path: '/api/ai/screenings',
+    body: { job_id: ID, instruction: 'sql + healthcare', max_results: 20 },
+  },
+  { method: 'GET', path: `/api/ai/screenings?job_id=${ID}` },
+  { method: 'GET', path: `/api/ai/screenings/${ID}` },
 ]
 
 for (const route of SCREENING_ROUTES) {

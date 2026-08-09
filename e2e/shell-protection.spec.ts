@@ -11,6 +11,7 @@ const PROTECTED_PATHS = [
   '/dashboard/people',
   '/dashboard/settings',
   '/dashboard/applications/11111111-2222-3333-4444-555555555555',
+  '/dashboard/jobs/11111111-2222-3333-4444-555555555555/screening',
 ]
 
 for (const path of PROTECTED_PATHS) {

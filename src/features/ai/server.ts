@@ -60,6 +60,7 @@ interface ResolvedAi {
   integrationId: string
   provider: AIProvider
 }
+export type ResolvedAiRef = ResolvedAi
 
 async function resolveAiOrNull(client: Client, ref: IntegrationRef): Promise<ResolvedAi | null> {
   const resolved = await getScopedIntegration(client, ref, 'ai')
@@ -81,6 +82,59 @@ async function requireAi(client: Client, ref: IntegrationRef): Promise<ResolvedA
     throw new AppError(ErrorCode.AI_NOT_CONFIGURED, 'Add your Gemini key in Settings → AI')
   }
   return ai
+}
+
+/** Availability probe for feature gating (17 §11 — create → 400 AI_NOT_CONFIGURED). */
+export async function resolveScopeAiOrNull(
+  client: Client,
+  scope: Scope,
+): Promise<ResolvedAi | null> {
+  return resolveAiOrNull(client, refForScope(scope))
+}
+
+/**
+ * Result-union AI call for quota-sensitive engines (17 §9.3) — D4-style: never
+ * throws; classifies failures so the caller can map them to row/session states.
+ */
+export type ScopeAiCall =
+  | { ok: true; text: string }
+  | { ok: false; keyBroken: boolean; retryable: boolean; message: string }
+
+export async function callScopeAi(
+  client: Client,
+  scope: Scope,
+  req: AiGenerateRequest,
+  friendly: string,
+): Promise<ScopeAiCall> {
+  const ai = await resolveAiOrNull(client, refForScope(scope))
+  if (!ai) {
+    return {
+      ok: false,
+      keyBroken: false,
+      retryable: false,
+      message: 'Add your Gemini key in Settings → AI',
+    }
+  }
+  const result = await ai.provider.generate(req)
+  if (result.ok) return { ok: true, text: result.text }
+  if (result.integrationBroken) {
+    await markIntegrationError(client, ai.integrationId)
+    return {
+      ok: false,
+      keyBroken: true,
+      retryable: false,
+      message: 'Your Gemini key was rejected — reconnect it in Settings → AI.',
+    }
+  }
+  if (result.code === 'ai_rate_limited') {
+    return {
+      ok: false,
+      keyBroken: false,
+      retryable: true,
+      message: 'AI is busy — try again in a minute.',
+    }
+  }
+  return { ok: false, keyBroken: false, retryable: result.retryable, message: friendly }
 }
 
 /** Uniform failure mapping (docs/10 §6) — exact user-facing strings are product copy. */
