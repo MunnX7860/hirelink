@@ -21,6 +21,7 @@ import {
   PROMPT_VERSIONS,
   RESUME_TEXT_CAP,
   buildJobDescriptionPrompt,
+  buildProfileExtractPrompt,
   buildResumeParsePrompt,
   buildSocialPostPrompt,
   buildSummaryPrompt,
@@ -32,12 +33,16 @@ import { AI_CAPABILITIES } from '@/lib/ai/types'
 import {
   PARSED_RESUME_JSON_SCHEMA,
   ParsedResumeSchema,
+  RESUME_PROFILE_JSON_SCHEMA,
+  ResumeProfileSchema,
   SUMMARY_JSON_SCHEMA,
   SummaryOutputSchema,
   decodeSummaryCache,
   encodeSummaryCache,
+  profileStale,
   type CandidateSummaryCache,
   type ParsedResume,
+  type ResumeProfile,
   type SummaryOutput,
 } from '@/features/ai/schemas'
 
@@ -315,6 +320,194 @@ export async function parseResumeFeature(
   throw new AppError(
     ErrorCode.INTEGRATION_ERROR,
     'Couldn’t parse this resume — you can still read it directly.',
+  )
+}
+
+// ── Resume profile, parse v2 (POST /api/ai/applicant-profile — docs/17 §6) ───
+
+/** Latest UPLOADED resume across the applicant's applications (profile source, 17 §6). */
+async function getLatestApplicantResume(
+  client: Client,
+  applicantId: string,
+): Promise<ResumeContextRow | null> {
+  const { data, error } = await client
+    .from('resumes')
+    .select(
+      'id, application_id, mime_type, storage_file_id, upload_status, parsed_text, ai_parsed, application:applications!inner(applicant_id)',
+    )
+    .eq('application.applicant_id', applicantId)
+    .eq('upload_status', 'uploaded')
+    .order('created_at', { ascending: false })
+    .limit(1)
+  if (error)
+    throw new AppError(ErrorCode.INTERNAL, 'Could not load the applicant’s resumes.', {
+      cause: error,
+    })
+  return ((data ?? [])[0] as unknown as ResumeContextRow | undefined) ?? null
+}
+
+interface StoredProfileRow {
+  payload: unknown
+  source_resume_id: string | null
+  prompt_version: string
+  updated_at: string
+}
+
+async function getStoredProfile(
+  client: Client,
+  applicantId: string,
+): Promise<StoredProfileRow | null> {
+  const { data, error } = await client
+    .from('applicant_profiles')
+    .select('payload, source_resume_id, prompt_version, updated_at')
+    .eq('applicant_id', applicantId)
+    .maybeSingle()
+  if (error)
+    throw new AppError(ErrorCode.INTERNAL, 'Could not load the parsed profile.', { cause: error })
+  return (data as StoredProfileRow | null) ?? null
+}
+
+async function requireApplicantInScope(
+  client: Client,
+  scope: Scope,
+  applicantId: string,
+): Promise<void> {
+  const { data, error } = await applyScope(
+    client.from('applicants').select('id, owner_id, organization_id'),
+    scope,
+  )
+    .eq('id', applicantId)
+    .maybeSingle()
+  if (error)
+    throw new AppError(ErrorCode.INTERNAL, 'Could not load the applicant.', { cause: error })
+  if (!data) throw new AppError(ErrorCode.NOT_FOUND, 'Applicant not found.')
+}
+
+export interface ApplicantProfileView {
+  profile: ResumeProfile | null
+  updated_at: string | null
+  prompt_version: string | null
+  /** 17 §6 staleness badge (newer resume arrived / prompt version moved). */
+  stale: boolean
+  /** A readable resume exists to build from (drives the Build button). */
+  buildable: boolean
+}
+
+/** Page read-model (server-side render; never exposes anything beyond the profile). */
+export async function getApplicantProfile(
+  client: Client,
+  scope: Scope,
+  applicantId: string,
+): Promise<ApplicantProfileView | null> {
+  const { data, error } = await applyScope(
+    client.from('applicants').select('id, owner_id, organization_id'),
+    scope,
+  )
+    .eq('id', applicantId)
+    .maybeSingle()
+  if (error)
+    throw new AppError(ErrorCode.INTERNAL, 'Could not load the applicant.', { cause: error })
+  if (!data) return null
+
+  const [stored, latest] = await Promise.all([
+    getStoredProfile(client, applicantId),
+    getLatestApplicantResume(client, applicantId),
+  ])
+  let profile: ResumeProfile | null = null
+  if (stored) {
+    const parsed = ResumeProfileSchema.safeParse(stored.payload)
+    if (parsed.success) profile = parsed.data // corrupted cache renders as "no profile"
+  }
+  return {
+    profile,
+    updated_at: stored?.updated_at ?? null,
+    prompt_version: stored?.prompt_version ?? null,
+    stale: profileStale(stored, latest?.id ?? null),
+    buildable: latest !== null,
+  }
+}
+
+export async function applicantProfileFeature(
+  client: Client,
+  scope: Scope,
+  input: { applicant_id: string },
+): Promise<{ profile: ResumeProfile; cached: boolean; updated_at: string }> {
+  await requireApplicantInScope(client, scope, input.applicant_id)
+
+  const [stored, latest] = await Promise.all([
+    getStoredProfile(client, input.applicant_id),
+    getLatestApplicantResume(client, input.applicant_id),
+  ])
+
+  // Cache rule (17 §6): fresh profile → reuse WITHOUT a model call (key not even consulted).
+  if (stored && !profileStale(stored, latest?.id ?? null)) {
+    const cached = ResumeProfileSchema.safeParse(stored.payload)
+    if (cached.success) return { profile: cached.data, cached: true, updated_at: stored.updated_at }
+  }
+
+  const ref = refForScope(scope)
+  const ai = await requireAi(client, ref)
+
+  if (!latest) {
+    throw new AppError(
+      ErrorCode.INTEGRATION_ERROR,
+      'No uploaded resume is attached to this applicant.',
+    )
+  }
+  const text = await getResumeText(client, ref, latest)
+  if (!text) {
+    throw new AppError(
+      ErrorCode.INTEGRATION_ERROR,
+      'Couldn’t read text from this resume (scanned PDFs and .doc aren’t supported).',
+    )
+  }
+
+  const basePrompt = buildProfileExtractPrompt(text.slice(0, RESUME_TEXT_CAP))
+  const req: Omit<AiGenerateRequest, 'prompt'> = {
+    temperature: AI_TEMPERATURE.parsing,
+    maxOutputTokens: 2048,
+    jsonSchema: RESUME_PROFILE_JSON_SCHEMA,
+  }
+
+  // docs/10 §4: zod-validate; invalid output → ONE retry with stricter prompt.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const prompt =
+      attempt === 0
+        ? basePrompt
+        : `${basePrompt}\n\nIMPORTANT: a previous attempt returned invalid output. Return ONLY valid JSON matching the required schema — no commentary.`
+    const raw = await generateOrThrow(
+      ai,
+      client,
+      { ...req, prompt },
+      'Couldn’t build a profile from this resume.',
+    )
+    const json = tolerantJsonParse(raw)
+    if (json) {
+      const parsed = ResumeProfileSchema.safeParse(json)
+      if (parsed.success) {
+        const { error: upsertError } = await client.from('applicant_profiles').upsert(
+          {
+            applicant_id: input.applicant_id,
+            payload: parsed.data,
+            source_resume_id: latest.id,
+            prompt_version: PROMPT_VERSIONS.profile_extract,
+          },
+          { onConflict: 'applicant_id' },
+        )
+        if (upsertError)
+          logger.error('applicant_profiles upsert failed', { ...errorSummary(upsertError) })
+        return { profile: parsed.data, cached: false, updated_at: new Date().toISOString() }
+      }
+    }
+    logger.warn('ai profile output invalid; retrying', {
+      attempt,
+      applicant_id: input.applicant_id,
+    })
+  }
+
+  throw new AppError(
+    ErrorCode.INTEGRATION_ERROR,
+    'Couldn’t build a profile from this resume — you can still read it directly.',
   )
 }
 

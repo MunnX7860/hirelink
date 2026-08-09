@@ -4,6 +4,10 @@ import { notFound, redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { getApplicantDetail } from '@/features/applicants/server'
 import { resolveWorkspace } from '@/features/orgs/server'
+import { getScopedIntegration } from '@/lib/integrations/resolve'
+import { refForScope } from '@/features/orgs/scope'
+import { getApplicantProfile } from '@/features/ai/server'
+import { ProfileCard } from '@/features/ai/profile-card'
 import { Card, CardHeader, CardTitle } from '@/ui/card'
 import { StatusPill } from '@/ui/status-pill'
 import { TimelineList } from '@/features/applications/timeline-list'
@@ -34,6 +38,12 @@ export default async function ApplicantProfilePage({
   const detail = await getApplicantDetail(supabase, scope, id)
   if (!detail) notFound()
 
+  // Phase 5 (17 §6): AI profile slot — hidden unless a workspace key is active (docs/10 §6).
+  const [ai, profile] = await Promise.all([
+    getScopedIntegration(supabase, refForScope(scope), 'ai'),
+    getApplicantProfile(supabase, scope, detail.id),
+  ])
+
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-4 p-4 pb-24">
       <div className="min-w-0">
@@ -61,6 +71,10 @@ export default async function ApplicantProfilePage({
         </CardHeader>
         <TagEditor applicantId={detail.id} initialTags={detail.tags} />
       </Card>
+
+      {ai?.row.status === 'active' && profile ? (
+        <ProfileCard applicantId={detail.id} initial={profile} />
+      ) : null}
 
       <Card>
         <CardHeader>

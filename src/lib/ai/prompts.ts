@@ -6,6 +6,7 @@
 
 export const PROMPT_VERSIONS = {
   resume_parse: 'v1',
+  profile_extract: 'v1',
   summarize_candidate: 'v1',
   job_description: 'v1',
   social_post: 'v1',
@@ -38,6 +39,28 @@ Task: extract this resume into the required JSON structure.
 - experience: most recent first, max 6 entries; months = duration in months if determinable, else null.
 - education: max 3 entries.
 - summary: at most 60 words, neutral third-person, strictly from the text.
+
+<resume_text>
+${resumeText}
+</resume_text>`
+}
+
+// profile_extract.v1 — parse-v2 resume profile (docs/17 §6, docs/10 §2) ───────
+
+export function buildProfileExtractPrompt(resumeText: string): string {
+  return `${GUARDRAILS}
+
+Task: build a structured professional profile of this candidate for recruiter screening. Output the required JSON.
+- education: at most 5 entries; year = graduation year only if stated (else null).
+- employers: most recent first, at most 8; months = duration in months only if determinable from stated dates (else null); industry only if obvious from the content (else null).
+- skills vs tools: skills = competencies (e.g. "recruitment", "data analysis"); tools = named software/equipment (e.g. "excel", "tally"). Lowercase both. At most 30 skills and 15 tools. Copy the resume's own vocabulary — never add skills that are only implied.
+- responsibilities_summary: at most 120 words describing what the candidate actually did, strictly from the text.
+- total_experience_years: only if determinable from stated dates or explicit claims (else null).
+- location: the candidate's stated location (else null).
+- current_ctc / expected_ctc: annual amounts as plain numbers ONLY when the resume explicitly states them (else null). Never estimate or infer salary.
+- notice_period: only if stated (e.g. "30 days"), else null.
+- projects: at most 5, name + one-line summary.
+If the text contains none of a list's information, return an empty list. If a scalar is not stated, return null.
 
 <resume_text>
 ${resumeText}

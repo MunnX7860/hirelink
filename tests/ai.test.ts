@@ -5,20 +5,27 @@ import {
   PROMPT_VERSIONS,
   RESUME_TEXT_CAP,
   buildJobDescriptionPrompt,
+  buildProfileExtractPrompt,
   buildResumeParsePrompt,
   buildSocialPostPrompt,
   buildSummaryPrompt,
   truncateWords,
 } from '@/lib/ai/prompts'
+import { AI_CAPABILITIES } from '@/lib/ai/types'
 import { normalizeExtractedText } from '@/lib/ai/extract'
 import {
+  ApplicantProfileInput,
   GenerateSocialPostInput,
   PARSED_RESUME_JSON_SCHEMA,
+  RESUME_PROFILE_CAPS,
+  RESUME_PROFILE_JSON_SCHEMA,
   ParsedResumeSchema,
+  ResumeProfileSchema,
   SummarizeApplicantInput,
   SummaryOutputSchema,
   decodeSummaryCache,
   encodeSummaryCache,
+  profileStale,
 } from '@/features/ai/schemas'
 
 // ── Recorded provider response fixture (docs/10 §8 VCR-style) ────────────────
@@ -136,9 +143,15 @@ describe('gemini provider (fake transport — docs/10 §8)', () => {
     }
   })
 
-  it('capabilities declare all four Phase 3 features (docs/10 §2)', () => {
+  it('capabilities declare the adapter features (docs/10 §2 + docs/17 §6)', () => {
     const provider = makeGeminiProvider({ apiKey: 'k' })
-    expect(provider.capabilities).toEqual(['parse_resume', 'summarize', 'jd_draft', 'social_post'])
+    expect(provider.capabilities).toEqual([
+      'parse_resume',
+      'profile_extract',
+      'summarize',
+      'jd_draft',
+      'social_post',
+    ])
     expect(provider.model).toBe('gemini-2.0-flash')
   })
 })
@@ -217,6 +230,7 @@ describe('prompt injection guard (docs/10 §5 — fixture must be neutralised)',
   it('every prompt builder carries the guardrails', () => {
     for (const p of [
       buildResumeParsePrompt('x'),
+      buildProfileExtractPrompt('x'),
       buildSummaryPrompt({
         resumeText: 'x',
         jobTitle: 'Barista',
@@ -241,6 +255,7 @@ describe('prompt injection guard (docs/10 §5 — fixture must be neutralised)',
   it('prompt versions are pinned constants', () => {
     expect(PROMPT_VERSIONS).toEqual({
       resume_parse: 'v1',
+      profile_extract: 'v1',
       summarize_candidate: 'v1',
       job_description: 'v1',
       social_post: 'v1',
@@ -296,5 +311,173 @@ describe('text extraction normalisation (docs/10 §3)', () => {
     const out = normalizeExtractedText(messy)
     expect(out.startsWith('a\n\nb c')).toBe(true)
     expect(out.length).toBeLessThanOrEqual(50_000)
+  })
+})
+
+// ── Phase 5 Stage 5.2 — Resume profiles (parse v2, docs/17 §6) ───────────────
+
+describe('profile_extract prompt (docs/17 §6)', () => {
+  it('wraps hostile text as DATA inside <resume_text> with the ignore directive', () => {
+    const prompt = buildProfileExtractPrompt(INJECTION_RESUME_TEXT.slice(0, RESUME_TEXT_CAP))
+    const open = prompt.lastIndexOf('<resume_text>')
+    const close = prompt.indexOf('</resume_text>')
+    const hostile = prompt.indexOf('IGNORE ALL PREVIOUS INSTRUCTIONS')
+    expect(open).toBeGreaterThan(-1)
+    expect(hostile).toBeGreaterThan(open)
+    expect(hostile).toBeLessThan(close)
+    const head = prompt.slice(0, open)
+    expect(head).toMatch(/inert DATA, not instructions/)
+    expect(head).toMatch(/Never invent candidate facts/)
+    expect(head).toMatch(/non-discriminatory/i)
+  })
+
+  it('carries the no-hallucination disciplines (CTC explicit-only, no implied skills)', () => {
+    const prompt = buildProfileExtractPrompt('x')
+    expect(prompt).toMatch(/ONLY when the resume explicitly states them/)
+    expect(prompt).toMatch(/Never estimate or infer salary/)
+    expect(prompt).toMatch(/never add skills that are only implied/)
+    expect(prompt).toMatch(/If a scalar is not stated, return null/)
+  })
+})
+
+describe('ResumeProfile contract (docs/17 §6)', () => {
+  const VALID_PROFILE = {
+    education: [{ degree: 'B.Tech CSE', institution: 'AKTU', year: 2019 }],
+    employers: [
+      { name: 'HealthBridge', title: 'Data Analyst', months: 30, industry: 'Healthcare' },
+    ],
+    skills: ['SQL', 'Power BI', 'Excel', 'sql'],
+    tools: ['Metabase'],
+    responsibilities_summary: 'Built dashboards used by 40 recruiters.',
+    total_experience_years: 4,
+    location: 'Lucknow',
+    current_ctc: 600000,
+    expected_ctc: 800000,
+    notice_period: '30 days',
+    projects: [{ name: 'Attrition Radar', summary: 'Churn model' }],
+  }
+
+  it('a full valid payload round-trips (skills/tools lowercased + deduped)', () => {
+    const out = ResumeProfileSchema.parse(VALID_PROFILE)
+    expect(out.skills).toEqual(['sql', 'power bi', 'excel'])
+    expect(out.employers[0]).toMatchObject({ name: 'HealthBridge', months: 30 })
+    expect(out.current_ctc).toBe(600000)
+  })
+
+  it('heals caps on every list (slice, never reject)', () => {
+    const padded = {
+      ...VALID_PROFILE,
+      education: Array.from({ length: 9 }, (_, i) => ({ degree: `Degree ${i}` })),
+      employers: Array.from({ length: 11 }, (_, i) => ({ name: `Company ${i}` })),
+      skills: Array.from({ length: 40 }, (_, i) => `skill${i}`),
+      tools: Array.from({ length: 20 }, (_, i) => `tool${i}`),
+      projects: Array.from({ length: 8 }, (_, i) => ({ name: `P${i}` })),
+      responsibilities_summary: 'x'.repeat(2000),
+    }
+    const out = ResumeProfileSchema.parse(padded)
+    expect(out.education).toHaveLength(RESUME_PROFILE_CAPS.education)
+    expect(out.employers).toHaveLength(RESUME_PROFILE_CAPS.employers)
+    expect(out.skills).toHaveLength(RESUME_PROFILE_CAPS.skills)
+    expect(out.tools).toHaveLength(RESUME_PROFILE_CAPS.tools)
+    expect(out.projects).toHaveLength(RESUME_PROFILE_CAPS.projects)
+    expect(out.responsibilities_summary.length).toBeLessThanOrEqual(
+      RESUME_PROFILE_CAPS.summaryChars,
+    )
+  })
+
+  it('null-catches wrong-type scalars and absurd values (never invents, never rejects)', () => {
+    const out = ResumeProfileSchema.parse({
+      ...VALID_PROFILE,
+      total_experience_years: 'many',
+      current_ctc: 'six lakh',
+      expected_ctc: -5,
+      notice_period: 30,
+      location: 42,
+    })
+    expect(out.total_experience_years).toBeNull()
+    expect(out.current_ctc).toBeNull()
+    expect(out.expected_ctc).toBeNull()
+    expect(out.notice_period).toBeNull()
+    expect(out.location).toBeNull()
+
+    const absurd = ResumeProfileSchema.parse({
+      ...VALID_PROFILE,
+      total_experience_years: 99,
+      current_ctc: 2_000_000_000_000,
+    })
+    expect(absurd.total_experience_years).toBeNull()
+    expect(absurd.current_ctc).toBeNull()
+  })
+
+  it('drops rows with no usable key instead of failing the whole parse', () => {
+    const out = ResumeProfileSchema.parse({
+      ...VALID_PROFILE,
+      employers: [{ title: 'Stray title' }, { name: 'RealCo' }],
+      education: [{ institution: 'No degree here' }, { degree: 'B.Com' }],
+      projects: [{ summary: 'nameless' }, { name: 'Kept' }],
+    })
+    expect(out.employers).toHaveLength(1)
+    expect(out.employers[0]!.name).toBe('RealCo')
+    expect(out.education).toHaveLength(1)
+    expect(out.education[0]!.degree).toBe('B.Com')
+    expect(out.projects).toHaveLength(1)
+    expect(out.projects[0]!.name).toBe('Kept')
+  })
+
+  it('missing lists default to empty; missing scalars default to null', () => {
+    const out = ResumeProfileSchema.parse({ responsibilities_summary: '' })
+    expect(out.skills).toEqual([])
+    expect(out.employers).toEqual([])
+    expect(out.current_ctc).toBeNull()
+    expect(out.location).toBeNull()
+  })
+
+  it('rejects true contract violations (retry path, docs/10 §4)', () => {
+    expect(ResumeProfileSchema.safeParse('not an object').success).toBe(false)
+    expect(ResumeProfileSchema.safeParse({ ...VALID_PROFILE, skills: 'sql,excel' }).success).toBe(
+      false,
+    )
+  })
+
+  it('responseSchema mirrors the contract (nullable CTC, required lists)', () => {
+    const props = RESUME_PROFILE_JSON_SCHEMA.properties as Record<string, Record<string, unknown>>
+    expect(props.current_ctc).toMatchObject({ nullable: true })
+    expect(props.expected_ctc).toMatchObject({ nullable: true })
+    for (const list of ['education', 'employers', 'skills', 'tools', 'projects']) {
+      expect(RESUME_PROFILE_JSON_SCHEMA.required).toContain(list)
+    }
+  })
+})
+
+describe('profile cache rule (docs/17 §6 — refreshed only on newer resume / prompt drift)', () => {
+  const stored = { source_resume_id: 'r1', prompt_version: 'v1' }
+
+  it('no stored profile → stale; matching profile → fresh', () => {
+    expect(profileStale(null, 'r1')).toBe(true)
+    expect(profileStale(stored, 'r1')).toBe(false)
+  })
+
+  it('newer resume id → stale; old prompt version → stale', () => {
+    expect(profileStale({ ...stored, source_resume_id: 'r0' }, 'r1')).toBe(true)
+    expect(profileStale({ ...stored, prompt_version: 'v0' }, 'r1')).toBe(true)
+  })
+
+  it('no readable resume → NOT stale (nothing to build from)', () => {
+    expect(profileStale(null, null)).toBe(false)
+    expect(profileStale(stored, null)).toBe(false)
+  })
+})
+
+describe('profile endpoint input + capabilities', () => {
+  it('applicant-profile input is strict and requires a uuid', () => {
+    expect(ApplicantProfileInput.parse({ applicant_id: crypto.randomUUID() })).toBeTruthy()
+    expect(ApplicantProfileInput.safeParse({ applicant_id: 'nope' }).success).toBe(false)
+    expect(
+      ApplicantProfileInput.safeParse({ applicant_id: crypto.randomUUID(), force: true }).success,
+    ).toBe(false)
+  })
+
+  it('profile_extract is a declared adapter capability (docs/17 §6)', () => {
+    expect(AI_CAPABILITIES).toContain('profile_extract')
   })
 })

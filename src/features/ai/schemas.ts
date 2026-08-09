@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { SOCIAL_PLATFORMS, SOCIAL_TONES } from '@/lib/ai/prompts'
+import { PROMPT_VERSIONS, SOCIAL_PLATFORMS, SOCIAL_TONES } from '@/lib/ai/prompts'
 
 /**
  * AI feature schemas — docs/10 §4 structured output contract + docs/05 §4.7 inputs.
@@ -154,6 +154,156 @@ export function decodeSummaryCache(raw: string | null): CandidateSummaryCache | 
   }
 }
 
+// ── Resume profile (parse v2 — docs/17 §6; cache table applicant_profiles) ───
+
+export const RESUME_PROFILE_CAPS = {
+  education: 5,
+  employers: 8,
+  skills: 30,
+  tools: 15,
+  projects: 5,
+  summaryChars: 800,
+} as const
+
+function cappedKeywords(arr: string[], cap: number): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const raw of arr) {
+    const k = raw.trim().toLowerCase()
+    if (!k || seen.has(k)) continue
+    seen.add(k)
+    out.push(k)
+    if (out.length >= cap) break
+  }
+  return out
+}
+
+/** 0 ≤ v ≤ plausibility window, else null (never reject — heal). */
+function saneNumber(v: number | null, max: number): number | null {
+  return v !== null && Number.isFinite(v) && v >= 0 && v <= max ? v : null
+}
+
+export const ResumeProfileSchema = z.object({
+  education: z
+    .array(
+      z.object({
+        degree: z.string().catch(''),
+        institution: nullableString.catch(null),
+        year: nullableNumber.catch(null),
+      }),
+    )
+    .default([])
+    .transform((arr) => arr.filter((e) => e.degree.trim()).slice(0, RESUME_PROFILE_CAPS.education)),
+  employers: z
+    .array(
+      z.object({
+        name: z.string().catch(''),
+        title: nullableString.catch(null),
+        months: nullableNumber.catch(null),
+        industry: nullableString.catch(null),
+      }),
+    )
+    .default([])
+    .transform((arr) => arr.filter((e) => e.name.trim()).slice(0, RESUME_PROFILE_CAPS.employers)),
+  skills: z
+    .array(z.string())
+    .default([])
+    .transform((arr) => cappedKeywords(arr, RESUME_PROFILE_CAPS.skills)),
+  tools: z
+    .array(z.string())
+    .default([])
+    .transform((arr) => cappedKeywords(arr, RESUME_PROFILE_CAPS.tools)),
+  responsibilities_summary: z
+    .string()
+    .catch('')
+    .transform((s) => s.trim().slice(0, RESUME_PROFILE_CAPS.summaryChars)),
+  total_experience_years: nullableNumber.catch(null).transform((v) => saneNumber(v, 60)),
+  location: nullableString.catch(null),
+  /** CTC only ever appears when explicitly stated on the resume (prompt discipline, 17 §6). */
+  current_ctc: nullableNumber.catch(null).transform((v) => saneNumber(v, 1_000_000_000_000)),
+  expected_ctc: nullableNumber.catch(null).transform((v) => saneNumber(v, 1_000_000_000_000)),
+  notice_period: nullableString.catch(null),
+  projects: z
+    .array(
+      z.object({
+        name: z.string().catch(''),
+        summary: nullableString.catch(null),
+      }),
+    )
+    .default([])
+    .transform((arr) => arr.filter((p) => p.name.trim()).slice(0, RESUME_PROFILE_CAPS.projects)),
+})
+export type ResumeProfile = z.infer<typeof ResumeProfileSchema>
+
+/** Gemini responseSchema for the profile contract (docs/10 §4). Pure data, unit-tested. */
+export const RESUME_PROFILE_JSON_SCHEMA: Record<string, unknown> = {
+  type: 'OBJECT',
+  properties: {
+    education: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          degree: { type: 'STRING' },
+          institution: { type: 'STRING', nullable: true },
+          year: { type: 'NUMBER', nullable: true },
+        },
+        required: ['degree'],
+      },
+    },
+    employers: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          name: { type: 'STRING' },
+          title: { type: 'STRING', nullable: true },
+          months: { type: 'NUMBER', nullable: true },
+          industry: { type: 'STRING', nullable: true },
+        },
+        required: ['name'],
+      },
+    },
+    skills: { type: 'ARRAY', items: { type: 'STRING' } },
+    tools: { type: 'ARRAY', items: { type: 'STRING' } },
+    responsibilities_summary: { type: 'STRING' },
+    total_experience_years: { type: 'NUMBER', nullable: true },
+    location: { type: 'STRING', nullable: true },
+    current_ctc: { type: 'NUMBER', nullable: true },
+    expected_ctc: { type: 'NUMBER', nullable: true },
+    notice_period: { type: 'STRING', nullable: true },
+    projects: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          name: { type: 'STRING' },
+          summary: { type: 'STRING', nullable: true },
+        },
+        required: ['name'],
+      },
+    },
+  },
+  required: ['education', 'employers', 'skills', 'tools', 'responsibilities_summary', 'projects'],
+}
+
+/**
+ * Cache rule (docs/17 §6): refreshed ONLY when a newer uploaded resume exists
+ * or the prompt version changed — never re-parsed needlessly. "No resume" is
+ * not staleness (nothing to build from).
+ */
+export function profileStale(
+  stored: { source_resume_id: string | null; prompt_version: string } | null,
+  latestResumeId: string | null,
+): boolean {
+  if (!latestResumeId) return false
+  if (!stored) return true
+  return (
+    stored.source_resume_id !== latestResumeId ||
+    stored.prompt_version !== PROMPT_VERSIONS.profile_extract
+  )
+}
+
 // ── Endpoint inputs (docs/05 §4.7) ─────────────────────────────────────────────
 
 export const ConnectAiInput = z
@@ -171,6 +321,9 @@ export const SummarizeApplicantInput = z
     force: z.boolean().default(false),
   })
   .strict()
+
+/** No force flag: staleness (newer resume / prompt version) drives refresh (17 §6). */
+export const ApplicantProfileInput = z.object({ applicant_id: z.string().uuid() }).strict()
 
 export const GenerateJobDescriptionInput = z
   .object({

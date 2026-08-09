@@ -92,7 +92,7 @@ Verdicts are computed at submission. Editing the questionnaire does not rewrite 
 - New capability on the **same** adapter: `profile_extract` (prompt `profile_extract.v1`, schema `ResumeProfileSchema`) extracting: education[], employers[] (name, title, months, industry?), skills[]/tools[], responsibilities_summary, total_experience_years, location, current_ctc/expected_ctc (only when explicitly stated), notice_period, projects[] (≤5).
 - Extraction source = `resumes.parsed_text` (Phase 3 pipeline reused; `.doc` → graceful null as today).
 - Cache: `applicant_profiles` keyed by applicant, `source_resume_id` recorded; refreshed only when a **newer** resume arrives or the prompt version changes. Never re-parsed needlessly; original file untouched in Drive.
-- Profiles are recruiter-visible (applicant profile page gains a "Parsed profile" card, collapsed by default) and are the primary AI-screening input alongside questionnaire answers.
+- Profiles are recruiter-visible (applicant profile page gains a "Parsed profile" card, collapsed by default **when a profile exists** — the empty state starts open so the Build action is visible) and are the primary AI-screening input alongside questionnaire answers. Build/refresh route: `POST /api/ai/applicant-profile` (05 §4.10).
 
 ## 7. AI Screening Sessions
 

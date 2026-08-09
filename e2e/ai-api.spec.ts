@@ -10,6 +10,7 @@ const ZERO = '00000000-0000-0000-0000-000000000000'
 const AI_ROUTES: Array<{ name: string; path: string; body: unknown }> = [
   { name: 'parse-resume', path: '/api/ai/parse-resume', body: { resume_id: ZERO } },
   { name: 'summarize', path: '/api/ai/summarize-applicant', body: { applicant_id: ZERO } },
+  { name: 'profile', path: '/api/ai/applicant-profile', body: { applicant_id: ZERO } },
   { name: 'jd', path: '/api/ai/generate/job-description', body: { title: 'Barista' } },
   { name: 'social', path: '/api/ai/generate/social-post', body: { job_id: ZERO } },
   { name: 'connect', path: '/api/integrations/ai', body: { api_key: 'AIza-not-real' } },

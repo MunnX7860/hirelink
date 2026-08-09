@@ -6,10 +6,12 @@ import 'server-only'
  * D4-style: results are unions; providers never throw across the seam.
  */
 
-export type AiFeature = 'parse_resume' | 'summarize' | 'jd_draft' | 'social_post'
+export type AiFeature =
+  'parse_resume' | 'profile_extract' | 'summarize' | 'jd_draft' | 'social_post'
 
 export const AI_CAPABILITIES: readonly AiFeature[] = [
   'parse_resume',
+  'profile_extract',
   'summarize',
   'jd_draft',
   'social_post',

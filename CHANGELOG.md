@@ -4,6 +4,18 @@ All significant changes to product, docs, and architecture. Format: `YYYY-MM-DD 
 
 ## [Unreleased]
 
+### Added — Phase 5 · Smart Screening (Stage 5.2 — resume profiles, 2026-08-09)
+
+**The parse-v2 resume profile: one tap reads a candidate's latest resume into a structured, hallucination-guarded profile (employers, skills, tools, education, CTC-only-when-stated, notice period, projects) — cached per applicant and reused by Stage 5.3 screening. Runs on the SAME Gemini adapter/key as Phase 3; nothing changes when no key is configured.**
+
+- **Adapter capability `profile_extract`** (docs/17 §6) + pinned prompt `profile_extract.v1`: the three Phase-3 non-negotiables (extraction-only, inert `<resume_text>` / injection-ignoring, non-discriminatory) plus explicit profile disciplines — "CTC **only when the resume explicitly states it**, never estimate salary", "copy the resume's own vocabulary, never add implied skills", "unknown scalar → null". Newly-connected keys advertise the capability; pre-Phase-5 keys gate the feature on active status (like every AI feature), so they keep working unchanged.
+- **`ResumeProfileSchema`** (zod enforcement after Gemini `responseSchema`, docs/10 §4): heal-on-rails — caps sliced (education 5 / employers 8 / skills 30 / tools 15 / projects 5 / summary 800 chars), skills+tools lowercased+deduped, wrong-type or absurd scalars → null (never a fabricated value, never a hard failure), true contract violations rejected → one stricter retry → friendly error.
+- **`applicant_profiles` cache now live** (table from migration 0007): refreshed ONLY when a newer uploaded resume appears or the prompt version drifts (`profileStale`, 17 §6 "never re-parsed needlessly"); a fresh profile short-circuits with `cached: true` **without a model call or even a key**. Extraction reuses the Phase-3 `resumes.parsed_text` pipeline (Drive download → pdf/docx text → cache); `.doc`/scanned files degrade to the same graceful copy as parse-resume. Original files untouched in Drive (17 §13).
+- **`POST /api/ai/applicant-profile`** (docs/05 §4.10 row): thin route (auth → zod → feature), scope-verified per workspace with 404 semantics.
+- **Recruiter UI**: applicant profile page gains the **Parsed profile card** — hidden unless the workspace AI key is active (docs/10 §6), collapsed once populated (empty state opens with the Build action), "outdated" badge on staleness, mobile-first rendering of facts / CTC labelled "as stated on the resume" / skill & tool chips / employers / education / responsibilities / projects; Re-build reports honestly when nothing changed ("no AI credit used").
+- **Tests**: +14 unit → **295** (schema heal/reject matrix, injection-fixture neutralisation on the new prompt, no-hallucination discipline assertions, `profileStale` truth table, capability + input schemas) — incl. stage-required "prompt builders asserted" from docs/13 Phase-5; +1 always-on e2e (401 matrix row) → **54**.
+- **Docs truth**: docs/05 §4.10 + docs/17 §6 amended for the shipped route and card-collapse nuance; roadmap 5.2 marked built.
+
 ### Added — Phase 5 · Smart Screening (Stage 5.1 — questionnaire + deterministic engine, 2026-08-09)
 
 **HireLink can now attach a screening questionnaire to a job and compute a deterministic verdict (QUALIFIED / DOES_NOT_MEET_MANDATORY / REVIEW_REQUIRED) the moment a candidate applies — with the safety rail that anything ambiguous is sent to a human, never auto-rejected. Works with ZERO AI configured. Verdicts live on their own `applications.screening_status` column — the pipeline status stays human-owned.**
