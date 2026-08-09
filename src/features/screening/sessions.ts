@@ -49,6 +49,8 @@ export interface SessionSummary {
   started_at: string | null
   completed_at: string | null
   created_by_name: string
+  /** Drive summary artifact id when written (17 §13; dashboard renders the link). */
+  summary_file_id: string | null
 }
 
 interface SessionDbRow {
@@ -68,6 +70,7 @@ interface SessionDbRow {
   created_at: string
   started_at: string | null
   completed_at: string | null
+  summary_file_id?: string | null
 }
 
 function toSummary(row: SessionDbRow, nameByUserId: Map<string, string>): SessionSummary {
@@ -87,6 +90,8 @@ function toSummary(row: SessionDbRow, nameByUserId: Map<string, string>): Sessio
     started_at: row.started_at,
     completed_at: row.completed_at,
     created_by_name: nameByUserId.get(row.owner_id) ?? 'Unknown',
+    // Pre-0009 rows (or skipped artifacts) surface null — the UI hides the link.
+    summary_file_id: row.summary_file_id ?? null,
   }
 }
 

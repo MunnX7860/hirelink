@@ -326,9 +326,20 @@ function SessionItem({ session, onChanged }: { session: SessionSummary; onChange
         </div>
       ) : null}
 
-      {/* Session actions (17 §9.3): retry failed-only / stop in-flight */}
-      {retryable || cancellable ? (
-        <div className="flex flex-wrap gap-2">
+      {/* Session actions (17 §9.3): retry failed-only / stop in-flight / Drive artifact */}
+      {retryable || cancellable || session.summary_file_id ? (
+        <div className="flex flex-wrap items-center gap-2">
+          {session.summary_file_id ? (
+            <a
+              href={`https://drive.google.com/file/d/${session.summary_file_id}/view`}
+              target="_blank"
+              rel="noreferrer"
+              title="Immutable JSON summary of this session in your Drive (AI Screenings folder)"
+              className="inline-flex h-9 items-center text-sm font-medium text-brand hover:underline"
+            >
+              Summary in Drive ↗
+            </a>
+          ) : null}
           {retryable ? (
             <Button
               size="sm"
