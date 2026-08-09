@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getOrgBrandForJob, getPublicJobBySlug } from '@/features/jobs/server'
 import { resolveBrand } from '@/features/orgs/server'
+import { publicQuestionsFor } from '@/features/screening/server'
 import { BrandSchema } from '@/features/orgs/schemas'
 import { Badge } from '@/ui/badge'
 import { Card } from '@/ui/card'
@@ -83,7 +84,12 @@ export default async function ApplyPage({ params }: PageProps) {
           </p>
         ) : null}
       </div>
-      <ApplyForm slug={slug} jobTitle={job.title} formConfig={job.form_config} />
+      <ApplyForm
+        slug={slug}
+        jobTitle={job.title}
+        formConfig={job.form_config}
+        questions={publicQuestionsFor(job)}
+      />
 
       {brand?.custom ? null : (
         <p className="mt-6 flex justify-center">

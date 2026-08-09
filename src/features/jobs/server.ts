@@ -194,7 +194,9 @@ export async function getPublicJobBySlug(
 ): Promise<(PublicJob & { id: string; owner_id: string; organization_id: string | null }) | null> {
   const { data, error } = await client
     .from('jobs')
-    .select('id, owner_id, organization_id, title, description, status, form_config')
+    .select(
+      'id, owner_id, organization_id, title, description, status, form_config, screening_config',
+    )
     .eq('slug', slug)
     .maybeSingle()
   if (error) throw new AppError(ErrorCode.INTERNAL, 'Could not load the job.', { cause: error })

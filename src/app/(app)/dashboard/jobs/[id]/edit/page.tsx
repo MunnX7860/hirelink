@@ -6,6 +6,8 @@ import { getScopedIntegration } from '@/lib/integrations/resolve'
 import { resolveWorkspace } from '@/features/orgs/server'
 import { refForScope } from '@/features/orgs/scope'
 import { JobForm } from '@/features/jobs/job-form'
+import { QuestionnaireBuilder } from '@/features/screening/questionnaire-builder'
+import { parseScreeningConfig } from '@/features/screening/schemas'
 
 export const metadata: Metadata = { title: 'Edit job' }
 export const dynamic = 'force-dynamic'
@@ -35,6 +37,10 @@ export default async function EditJobPage({ params }: { params: Promise<{ id: st
         job={job}
         driveConnected={Boolean(drive && drive.row.status === 'active')}
         aiEnabled={Boolean(ai && ai.row.status === 'active')}
+      />
+      <QuestionnaireBuilder
+        jobId={job.id}
+        initialQuestions={parseScreeningConfig(job.screening_config).questions}
       />
     </div>
   )

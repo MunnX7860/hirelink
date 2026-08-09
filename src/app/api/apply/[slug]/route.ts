@@ -6,6 +6,8 @@ import { getPublicJobBySlug, getOrgBrandForJob } from '@/features/jobs/server'
 import { ApplyInput } from '@/features/applications/schemas'
 import { validateResumeFile } from '@/features/applications/file-validation'
 import { createApplicationForJob, getOwnerNotificationPrefs } from '@/features/applications/server'
+import { parseScreeningConfig, validateAnswers, AnswersInput } from '@/features/screening/schemas'
+import { persistAnswersAndVerdict } from '@/features/screening/server'
 import { resolveBrand } from '@/features/orgs/server'
 import { resolveDriveStorage } from '@/lib/integrations/resolve'
 import { Notifications, firstName } from '@/lib/notifications'
@@ -63,6 +65,38 @@ export const POST = handleRoute(async (_ctx, request: Request, ctx: RouteContext
   if (!job) throw new AppError(ErrorCode.NOT_FOUND, 'Job not found.')
   if (job.status !== 'active') {
     throw new AppError(ErrorCode.JOB_CLOSED, 'This position is no longer accepting applications.')
+  }
+
+  // 3b) Questionnaire answers (docs/17 §5): validate against the job's question
+  //     set (PRIVATE rules stay server-side; unknown ids dropped). Missing required
+  //     answers → 400 with per-question field errors keyed `answers.<id>`.
+  const screening = parseScreeningConfig(job.screening_config)
+  let answersCleaned: ReturnType<typeof validateAnswers>['cleaned'] = {}
+  if (screening.questions.length > 0) {
+    let rawAnswers: unknown = {}
+    const rawField = form.get('answers')
+    if (typeof rawField === 'string' && rawField.trim() !== '') {
+      if (rawField.length > 8 * 1024) {
+        throw new AppError(ErrorCode.VALIDATION_ERROR, 'Some fields are invalid.', {
+          details: { answers: ['Answers payload is too large.'] },
+        })
+      }
+      try {
+        const parsedJson: unknown = JSON.parse(rawField)
+        rawAnswers = AnswersInput.parse(parsedJson)
+      } catch {
+        throw new AppError(ErrorCode.VALIDATION_ERROR, 'Some fields are invalid.', {
+          details: { answers: ['Answers payload is malformed.'] },
+        })
+      }
+    }
+    const validation = validateAnswers(screening.questions, rawAnswers as Record<string, unknown>)
+    if (!validation.ok) {
+      throw new AppError(ErrorCode.VALIDATION_ERROR, 'Some fields are invalid.', {
+        details: validation.fieldErrors,
+      })
+    }
+    answersCleaned = validation.cleaned
   }
 
   // 4) form_config enforcement: hidden fields are dropped; required resume must exist (docs/02 §4.2).
@@ -127,6 +161,19 @@ export const POST = handleRoute(async (_ctx, request: Request, ctx: RouteContext
       .from('applications')
       .update({ source_meta: { cover_note: input.cover_note } })
       .eq('id', result.applicationId)
+  }
+
+  // 6b) Questionnaire: persist answers + compute the deterministic verdict
+  //     (docs/17 §4–§5). First-write-wins on duplicates; absorbed on failure (D4).
+  if (!result.alreadyApplied && screening.questions.length > 0) {
+    await persistAnswersAndVerdict({
+      client: service,
+      jobOwnerId: job.owner_id,
+      applicationId: result.applicationId,
+      applicantId: result.applicantId,
+      config: screening,
+      answers: answersCleaned,
+    })
   }
 
   // 7) Notifications — fire-and-forget AFTER the response (docs/03 §5; `after` keeps

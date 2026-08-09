@@ -7,6 +7,11 @@ import { Textarea } from '@/ui/textarea'
 import { Button } from '@/ui/button'
 import { RESUME_MAX_BYTES, RESUME_MIME_LABELS } from '@/features/applications/constants'
 import type { FormConfigValue } from '@/features/jobs/schemas'
+import {
+  EDUCATION_LEVELS,
+  EDUCATION_LABELS,
+  type PublicQuestionValue,
+} from '@/features/screening/schemas'
 
 /**
  * Public apply form — docs/02 §4, docs/06 §4.
@@ -27,16 +32,29 @@ export function ApplyForm({
   slug,
   jobTitle,
   formConfig,
+  questions = [],
 }: {
   slug: string
   jobTitle: string
   formConfig: FormConfigValue
+  /** Phase 5 (17 §3.3): sanitized question schema — never carries rules. */
+  questions?: PublicQuestionValue[]
 }) {
   const [phase, setPhase] = useState<Phase>({ kind: 'form' })
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [formError, setFormError] = useState<string | null>(null)
   const [fileName, setFileName] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const [answers, setAnswers] = useState<Record<string, string | number | boolean | string[]>>({})
+
+  function setAnswer(questionId: string, value: string | number | boolean | string[]) {
+    setAnswers((prev) => ({ ...prev, [questionId]: value }))
+    setErrors((prev) => {
+      const next = { ...prev }
+      delete next[`answers.${questionId}`]
+      return next
+    })
+  }
 
   const fields = useMemo(
     () => ({
@@ -64,6 +82,17 @@ export function ApplyForm({
       else if (!/\.(pdf|doc|docx)$/i.test(file.name))
         e.resume = 'Resume must be a PDF, DOC or DOCX file.'
     }
+    // Required questionnaire answers (mirrors server validateAnswers — 17 §5).
+    for (const q of questions) {
+      if (!q.required) continue
+      const value = answers[q.id]
+      const empty =
+        value === undefined ||
+        value === '' ||
+        (Array.isArray(value) && value.length === 0) ||
+        (typeof value === 'string' && value.trim() === '')
+      if (empty) e[`answers.${q.id}`] = 'This question needs an answer.'
+    }
     return e
   }
 
@@ -90,6 +119,7 @@ export function ApplyForm({
       return
     }
     setErrors({})
+    if (questions.length > 0) fd.set('answers', JSON.stringify(answers))
 
     // XHR (not fetch) for a real upload progress bar — docs/06 §4.
     const xhr = new XMLHttpRequest()
@@ -208,6 +238,16 @@ export function ApplyForm({
             disabled={submitting}
           />
         ) : null}
+        {questions.map((q) => (
+          <QuestionField
+            key={q.id}
+            question={q}
+            value={answers[q.id]}
+            onChange={(v) => setAnswer(q.id, v)}
+            error={errors[`answers.${q.id}`]}
+            disabled={submitting}
+          />
+        ))}
         {fields.resume !== 'hidden' ? (
           <div className="flex flex-col gap-1.5">
             <label htmlFor="resume" className="text-sm font-medium text-ink">
@@ -270,4 +310,214 @@ export function ApplyForm({
       </form>
     </Card>
   )
+}
+
+// ── Screening questionnaire fields (docs/17 §3.3 — native inputs only) ────────
+
+type AnswerValue = string | number | boolean | string[] | undefined
+
+function QuestionField({
+  question,
+  value,
+  onChange,
+  error,
+  disabled,
+}: {
+  question: PublicQuestionValue
+  value: AnswerValue
+  onChange: (value: string | number | boolean | string[]) => void
+  error: string | undefined
+  disabled: boolean
+}) {
+  // Same idiom as the rest of the apply form: required = bare label, optional = suffix.
+  const labelText = question.required ? question.label : `${question.label} (optional)`
+
+  const errorEl = error ? (
+    <p aria-live="polite" className="mt-1 text-sm text-danger">
+      {error}
+    </p>
+  ) : null
+
+  const optionBtn = (checked: boolean) =>
+    `rounded-lg border px-3 py-2 text-sm ${
+      checked ? 'border-brand bg-brand/10 font-medium text-brand' : 'border-slate-300 text-ink'
+    }`
+
+  switch (question.type) {
+    case 'yes_no':
+    case 'relocate':
+      return (
+        <fieldset className="flex flex-col gap-1.5">
+          <legend className="text-sm font-medium text-ink">{labelText}</legend>
+          <div className="flex gap-2">
+            {([true, false] as const).map((option) => (
+              <label key={String(option)} className="flex-1">
+                <input
+                  type="radio"
+                  name={`q_${question.id}`}
+                  className="sr-only"
+                  checked={value === option}
+                  onChange={() => onChange(option)}
+                  disabled={disabled}
+                />
+                <span className={`block text-center ${optionBtn(value === option)}`}>
+                  {option ? 'Yes' : 'No'}
+                </span>
+              </label>
+            ))}
+          </div>
+          {errorEl}
+        </fieldset>
+      )
+
+    case 'single_choice':
+      return (
+        <fieldset className="flex flex-col gap-1.5">
+          <legend className="text-sm font-medium text-ink">{labelText}</legend>
+          <div className="flex flex-col gap-2">
+            {(question.options ?? []).map((option) => (
+              <label key={option} className="flex items-center gap-2 text-sm text-ink">
+                <input
+                  type="radio"
+                  name={`q_${question.id}`}
+                  checked={value === option}
+                  onChange={() => onChange(option)}
+                  disabled={disabled}
+                  className="size-4 accent-brand"
+                />
+                {option}
+              </label>
+            ))}
+          </div>
+          {errorEl}
+        </fieldset>
+      )
+
+    case 'multiple_choice':
+      return (
+        <fieldset className="flex flex-col gap-1.5">
+          <legend className="text-sm font-medium text-ink">{labelText}</legend>
+          <div className="flex flex-col gap-2">
+            {(question.options ?? []).map((option) => {
+              const current = Array.isArray(value) ? value : []
+              const checked = current.includes(option)
+              return (
+                <label key={option} className="flex items-center gap-2 text-sm text-ink">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={disabled}
+                    aria-invalid={Boolean(error)}
+                    className="size-4 accent-brand"
+                    onChange={() =>
+                      onChange(checked ? current.filter((v) => v !== option) : [...current, option])
+                    }
+                  />
+                  {option}
+                </label>
+              )
+            })}
+          </div>
+          {errorEl}
+        </fieldset>
+      )
+
+    case 'dropdown':
+      return (
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor={`q_${question.id}`} className="text-sm font-medium text-ink">
+            {labelText}
+          </label>
+          <select
+            id={`q_${question.id}`}
+            value={typeof value === 'string' ? value : ''}
+            onChange={(e) => onChange(e.target.value)}
+            disabled={disabled}
+            aria-invalid={Boolean(error)}
+            className="h-11 w-full rounded-lg border border-slate-300 bg-surface px-3 text-base text-ink focus:border-brand"
+          >
+            <option value="">Select…</option>
+            {(question.options ?? []).map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+          {errorEl}
+        </div>
+      )
+
+    case 'education':
+      return (
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor={`q_${question.id}`} className="text-sm font-medium text-ink">
+            {labelText}
+          </label>
+          <select
+            id={`q_${question.id}`}
+            value={typeof value === 'string' ? value : ''}
+            onChange={(e) => onChange(e.target.value)}
+            disabled={disabled}
+            aria-invalid={Boolean(error)}
+            className="h-11 w-full rounded-lg border border-slate-300 bg-surface px-3 text-base text-ink focus:border-brand"
+          >
+            <option value="">Select…</option>
+            {EDUCATION_LEVELS.map((level) => (
+              <option key={level} value={level}>
+                {EDUCATION_LABELS[level]}
+              </option>
+            ))}
+          </select>
+          {errorEl}
+        </div>
+      )
+
+    case 'number':
+    case 'experience_years':
+      return (
+        <Input
+          label={labelText}
+          id={`q_${question.id}`}
+          type="number"
+          inputMode="decimal"
+          min={0}
+          value={typeof value === 'string' || typeof value === 'number' ? String(value) : ''}
+          onChange={(e) => onChange(e.target.value)}
+          error={error}
+          disabled={disabled}
+        />
+      )
+
+    case 'current_ctc':
+    case 'expected_ctc':
+      return (
+        <Input
+          label={labelText}
+          id={`q_${question.id}`}
+          type="number"
+          inputMode="numeric"
+          min={0}
+          placeholder="Per year, digits only"
+          value={typeof value === 'string' || typeof value === 'number' ? String(value) : ''}
+          onChange={(e) => onChange(e.target.value)}
+          error={error}
+          disabled={disabled}
+        />
+      )
+
+    case 'text':
+    case 'location':
+      return (
+        <Input
+          label={labelText}
+          id={`q_${question.id}`}
+          type="text"
+          maxLength={500}
+          value={typeof value === 'string' ? value : ''}
+          onChange={(e) => onChange(e.target.value)}
+          error={error}
+          disabled={disabled}
+        />
+      )
+  }
 }

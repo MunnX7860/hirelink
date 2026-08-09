@@ -1,6 +1,7 @@
 import { handleRoute, AppError, ErrorCode } from '@/lib/errors'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getPublicJobBySlug } from '@/features/jobs/server'
+import { publicQuestionsFor } from '@/features/screening/server'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -23,5 +24,7 @@ export const GET = handleRoute(async (_ctx, _request: Request, ctx: RouteContext
     description: job.description,
     status: job.status,
     form_config: job.form_config,
+    // Phase 5 (17 §3.4): SANITIZED — labels/options only, rules never leave the server.
+    questions: publicQuestionsFor(job),
   }
 })

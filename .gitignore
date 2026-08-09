@@ -46,3 +46,7 @@ supabase/.env
 
 # sandbox/host artifacts
 .config/
+
+# sandbox artifacts (wiped between turns — never track)
+.npm/
+.sudo_as_admin_successful

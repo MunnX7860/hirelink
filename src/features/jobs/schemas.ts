@@ -62,6 +62,8 @@ export interface JobRow {
   slug: string
   status: JobStatusValue
   form_config: FormConfigValue
+  /** Phase 5: PRIVATE questionnaire incl. rules — ever project via sanitizeQuestions (17 §3.4). */
+  screening_config?: unknown
   drive_folder_id: string | null
   created_at: string
   updated_at: string
@@ -73,4 +75,6 @@ export interface PublicJob {
   description: string
   status: JobStatusValue
   form_config: FormConfigValue
+  /** raw screening jsonb — sanitized before ANY public output (17 §3.4). */
+  screening_config?: unknown
 }

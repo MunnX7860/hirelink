@@ -12,6 +12,8 @@ import { TagEditor } from '@/features/applicants/tag-editor'
 import { NotesSection } from '@/features/applicants/notes-section'
 import { ApplicationDangerZone } from '@/features/applications/application-danger-zone'
 import { AiPanel } from '@/features/ai/ai-panel'
+import { AnswersCard } from '@/features/screening/answers-card'
+import { listAnswersForApplication } from '@/features/screening/server'
 import { getScopedIntegration } from '@/lib/integrations/resolve'
 import { resolveWorkspace } from '@/features/orgs/server'
 import { refForScope } from '@/features/orgs/scope'
@@ -39,7 +41,10 @@ export default async function ApplicationDetailPage({
   const detail = await getApplicationDetail(supabase, scope, id)
   if (!detail) notFound()
 
-  const ai = await getScopedIntegration(supabase, refForScope(scope), 'ai')
+  const [ai, answersResult] = await Promise.all([
+    getScopedIntegration(supabase, refForScope(scope), 'ai'),
+    listAnswersForApplication(supabase, scope, detail.id),
+  ])
   const aiEnabled = ai?.row.status === 'active'
 
   const resume = detail.resumes.find((r) => r.upload_status === 'uploaded')
@@ -94,6 +99,11 @@ export default async function ApplicationDetailPage({
           <p className="whitespace-pre-wrap text-sm leading-6 text-ink">{detail.cover_note}</p>
         </Card>
       ) : null}
+
+      <AnswersCard
+        answers={answersResult?.data ?? []}
+        screeningStatus={answersResult?.screening_status ?? detail.screening_status ?? null}
+      />
 
       <Card>
         <CardHeader>

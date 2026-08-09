@@ -77,7 +77,7 @@ The apply page and `GET /api/jobs/:slug/public` receive a **sanitized projection
 
 ### 4.4 Re-evaluation
 
-Verdicts are computed at submission. Editing the questionnaire does not rewrite history; the job builder offers a one-click **"Re-run screening for existing applications"** that recomputes verdicts for non-hired/rejected applications and journals `questionnaire_screened` events (bulk-safe, chunked; same worker as §9).
+Verdicts are computed at submission. Editing the questionnaire does not rewrite history; the job builder offers a one-click **"Re-run screening for existing applications"** that recomputes verdicts for non-hired/rejected applications and journals `questionnaire_screened` events for changed verdicts only. The recompute runs **synchronously** in the request (the engine is a pure function; the work is DB-bound and batched at 500 rows per read, ≤ 10 k applications per job) — it deliberately does NOT use the §9 AI worker, which exists for quota-sensitive Gemini calls, not deterministic rule evaluation.
 
 ## 5. Apply-Flow Integration (05 §4.2 amendment)
 

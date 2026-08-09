@@ -90,6 +90,8 @@ export interface ApplicationRow {
   job_id: string
   applicant_id: string
   status: ApplicationStatusValue
+  /** Phase 5 deterministic verdict (17 §2) — null = no mandatory questionnaire. */
+  screening_status?: 'qualified' | 'does_not_meet_mandatory' | 'review_required' | null
   source_meta: Record<string, unknown>
   applied_at: string
   updated_at: string
