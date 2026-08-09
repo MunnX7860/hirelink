@@ -189,7 +189,7 @@ Row-level statuses: `pending → ok | failed(error)`. Timeouts/network/parse →
 
 ## 13. Drive organization (decision)
 
-**Files are never moved or duplicated by screening.** `Master/<Job>/Applications/…` stays as-is (07); verdicts/ranks live in the DB. Optional artifact: on session completion the worker writes one immutable JSON summary (`screening-<date>-<shortid>.json`: pool counts, result rows incl. reasons/evidence) into `Master/<Job>/AI Screenings/` (created lazily, cached id on the session row). Failure to write never fails the session (D4).
+**Files are never moved or duplicated by screening.** `Master/<Job>/Applications/…` stays as-is (07); verdicts/ranks live in the DB. Optional artifact: on session completion the worker writes one immutable JSON summary (`screening-<date>-<shortid>.json`: pool counts, result rows incl. reasons/evidence) into `Master/<Job>/AI Screenings/` (created lazily via `ensureFolder`, cached on `ai_screening_sessions.summary_folder_id` — later sessions of the same job reuse the first cached sibling id — and the file id lands on `summary_file_id`). **Write-once:** a retried session does NOT rewrite the artifact (immutability) — the dashboard remains the live source and links the file when present. Drive disconnected/unauthorized → artifact skipped silently; failure to write never fails the session (D4).
 
 ## 14. Human-in-the-loop guarantees (locked)
 

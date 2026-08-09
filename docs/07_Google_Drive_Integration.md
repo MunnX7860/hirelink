@@ -34,17 +34,20 @@ Login (Supabase Auth Google) and Drive use **two different OAuth grants**. Drive
 {User-chosen Root Folder}/                    ← integrations.config.root_folder_id
 └── Jobs/
     └── {sanitized Job Title}—{job.id first-8}/   e.g. "Barista—4f2a91c3"
-        └── {sanitized Applicant Name}—{applicant.id first-8}—{safe filename}.pdf
+        ├── {sanitized Applicant Name}—{applicant.id first-8}—{safe filename}.pdf
+        └── AI Screenings/                         ← Phase 5 (17 §13): one immutable summary JSON per completed screening session, screening-<date>-<shortid>.json
 ```
 
 - Root chosen by owner via picker (`GET /api/integrations/google/folders`) or auto-created as **"HireLink"** (`POST .../root-folder { create_named }`).
 - Job folder created lazily on first resume (`ensureJobFolder`), cached on `jobs.drive_folder_id`.
+- `AI Screenings/` created lazily on first completed screening session (`ensureFolder`), cached on `ai_screening_sessions.summary_folder_id` (sibling sessions of the same job reuse the first cached id; the uploaded file id lands on `summary_file_id`). Screening NEVER moves or duplicates resumes.
 - Sanitisation: strip `/\:*?"<>|`, collapse spaces on dots, max 80 chars. Names are cosmetic — IDs are the identity.
 
 ## 5. Upload Flow (called from `03 §5`)
 
 ```
 ensureJobFolder(job)                       // cached folder id or create under Jobs/
+ensureFolder('AI Screenings', jobFolderId) // Phase 5 screening summaries (17 §13)
 uploadFile({ folderId, filename, mime, data })
   → files.create({ name, parents: [folderId] }, media, supportsAllDrives: false)
   → return fileId

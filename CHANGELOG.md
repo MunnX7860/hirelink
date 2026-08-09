@@ -4,6 +4,17 @@ All significant changes to product, docs, and architecture. Format: `YYYY-MM-DD 
 
 ## [Unreleased]
 
+### Added — Phase 5 · Smart Screening (Stage 5.5 — results polish + Drive summary artifact, 2026-08-09)
+
+**Every completed screening session now leaves a permanent, immutable JSON summary in the recruiter's own Google Drive (`{Job}/AI Screenings/screening-<date>-<shortid>.json`) — pool counts, the frozen session audit (instruction, model, prompt version, creator), per-category tallies, and every result with its reasons, quoted evidence, and INSUFFICIENT_EVIDENCE gaps. Resumes are never moved or duplicated; a Drive hiccup never touches the session.**
+
+- **Migration 0009** (additive, re-runnable): `ai_screening_sessions.summary_folder_id` + `summary_file_id` — the folder is created lazily under the job's existing Drive folder and cached on the session row; later sessions of the same job reuse the first cached sibling id (17 §13 verbatim).
+- **`StorageProvider.ensureFolder(name, parentId)`** (docs/03 §4 + 07 §4/§5 amended): generic named-child-folder seam, implemented by the Google Drive provider via the existing create-or-locate helper.
+- **`features/screening/summary-artifact.ts`**: pure builder (`buildScreeningSummary` — same `groupResultsForDisplay` read-model semantics as the dashboard, so the file always agrees with on-screen truth; shortlist → beyond-top-N → review → lower → failed order; INSUFFICIENT_EVIDENCE markers verbatim) + `writeScreeningSummaryArtifact` called from BOTH engines' completion points (interactive drain, batch drain). **Write-once**: retry completions never rewrite the artifact (immutability, 17 §13); Drive disconnected → skipped silently; any failure → absorbed + warn-logged (D4), `integrationBroken` flips the integration banner like every upload path; resume-parity single retry on retryable Drive errors.
+- **Read models + dashboard**: session list/detail rows carry `summary_file_id` (05 §4.10); completed sessions with an artifact show a **"Summary in Drive ↗"** link beside Retry/Stop.
+- **Tests**: +6 unit → **348** (filename shape, artifact version/counts/session-audit pins, top-N display order with failed-rows-last + error text, INSUFFICIENT_EVIDENCE passthrough, 0009 SQL sanity + additive-only guard). Gates: tsc/eslint/prettier clean, build green (screening page 8.16 kB; `/apply/[slug]` unchanged 5.63 kB), **61 always-on e2e** green.
+- **Deferred to 5.6 by design**: seed script + S1–S10 DB-gated journeys incl. the 500-candidate live scale gate (no "scale-ready" claim before it), docs/17 troubleshooting section, v1.2.0 version bump.
+
 ### Added — Phase 5 · Smart Screening (Stage 5.4 — async large pools, 2026-08-09)
 
 **Screening sessions now run to completion with no browser open: a per-minute cron worker, a crash-proof processing lease, quota auto-resume, and a Gemini Batch accelerator for pools ≥ 50 (separate quota, ~50 % cost) that falls back to the chunked engine seamlessly on ANY failure. Failed candidates retry individually; in-flight sessions can be stopped — 7 of 500 failing never fails the run.**

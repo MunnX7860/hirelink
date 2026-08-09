@@ -101,6 +101,8 @@ supabase/migrations/
 // lib/storage/types.ts
 export interface StorageProvider {
   ensureJobFolder(job: { id: string; title: string }): Promise<{ folderId: string }>
+  /** Named child folder — caller caches the id (Phase 5 'AI Screenings' summaries). */
+  ensureFolder(name: string, parentId: string): Promise<{ folderId: string }>
   uploadFile(input: {
     folderId: string
     filename: string

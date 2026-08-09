@@ -86,7 +86,8 @@ Remaining before public launch: staging verification with real services (Supabas
 - **Deterministic verdict** at apply time (`qualified` / `does_not_meet_mandatory` / `review_required`; ambiguity → review, never silent rejection; nobody deleted) ✅ spec'd ✅ built (5.1)
 - **Resume profiles** (parse v2 cache via the existing Gemini adapter) ✅ spec'd ✅ built (5.2)
 - **AI Screening Sessions**: natural-language instruction on a snapshotted pool, top-N as an _upper bound_, per-candidate category + reasons + evidence + uncertainties (`INSUFFICIENT_EVIDENCE` vocabulary), async processing (DB state machine + cron/advance worker, Gemini Batch accelerator), partial-failure retry, append-only history ✅ spec'd ✅ built small-pool path (5.3) ✅ async worker + Batch + retry/cancel (5.4)
-- Stages: 5.0 docs ✅ → 5.1 questionnaire+engine ✅ → 5.2 profiles ✅ → 5.3 sessions ✅ → 5.4 async ✅ → 5.5 results/Drive → 5.6 QA+scale gate
+- **Drive summary artifact** (17 §13): one immutable JSON summary per completed session in `{Job}/AI Screenings/` (files never moved; write-once; D4-absorbed) ✅ spec'd ✅ built (5.5)
+- Stages: 5.0 docs ✅ → 5.1 questionnaire+engine ✅ → 5.2 profiles ✅ → 5.3 sessions ✅ → 5.4 async ✅ → 5.5 results/Drive ✅ → 5.6 QA+scale gate
 
 **Deliverable:** a recruiter screens a 500-application job: questionnaire splits the pool deterministically, then one AI session ("healthcare + SQL + Power BI, up to 50") returns an evidence-backed shortlist — recruiter decides everything.
 **Exit criteria:** all Phase 1–4 suites still green (AI off) · engine 100 % branch-covered · S1–S10 green on live Supabase incl. 500-candidate run (scale gate — no "scale-ready" claim without it, 17 §16) · CHANGELOG v1.2.0.
