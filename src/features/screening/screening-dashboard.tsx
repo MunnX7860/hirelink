@@ -14,6 +14,8 @@ import {
   INSUFFICIENT_EVIDENCE,
   MAX_INSTRUCTION_CHARS,
   MAX_RESULTS_CAP,
+  canCancelSession,
+  canRetrySession,
   type ResultCategoryValue,
 } from '@/features/screening/session-schemas'
 import type {
@@ -184,10 +186,13 @@ function ResultGroup({
 
 // ── Session card with expandable detail + live polling ────────────────────────
 
-function SessionItem({ session }: { session: SessionSummary }) {
+function SessionItem({ session, onChanged }: { session: SessionSummary; onChanged: () => void }) {
+  const toast = useToast()
   const [open, setOpen] = useState(false)
   const [detail, setDetail] = useState<SessionDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [actionBusy, setActionBusy] = useState<'retry' | 'cancel' | null>(null)
+  const [confirmCancel, setConfirmCancel] = useState(false)
   const active = session.status === 'queued' || session.status === 'processing'
 
   const load = useCallback(async () => {
@@ -221,6 +226,49 @@ function SessionItem({ session }: { session: SessionSummary }) {
   const positions = new Map<string, number>()
   detail?.results.shortlist.forEach((r, i) => positions.set(r.applicationId, i + 1))
 
+  // 17 §9.3 — retry ONLY failed rows (never the whole pool); cancel frees the job.
+  const retryable =
+    canRetrySession(session.status) && (session.failed > 0 || session.status === 'failed')
+  const cancellable = canCancelSession(session.status)
+
+  async function doRetry() {
+    setActionBusy('retry')
+    try {
+      await mutate(`/api/ai/screenings/${session.id}/retry`, 'POST')
+      toast('Screening resumes — unscreened candidates go first in line.', { tone: 'success' })
+      onChanged()
+      if (open) void load()
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : 'Couldn’t retry — try again.', {
+        tone: 'danger',
+      })
+    } finally {
+      setActionBusy(null)
+    }
+  }
+
+  async function doCancel() {
+    // Two-tap confirm (mobile-first — no fragile modal for a reversible action).
+    if (!confirmCancel) {
+      setConfirmCancel(true)
+      setTimeout(() => setConfirmCancel(false), 4000)
+      return
+    }
+    setConfirmCancel(false)
+    setActionBusy('cancel')
+    try {
+      await mutate(`/api/ai/screenings/${session.id}/cancel`, 'POST')
+      toast('Screening stopped — retry revives it anytime.', { tone: 'success' })
+      onChanged()
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : 'Couldn’t stop it — try again.', {
+        tone: 'danger',
+      })
+    } finally {
+      setActionBusy(null)
+    }
+  }
+
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-slate-200 p-3">
       <div className="flex items-start justify-between gap-2">
@@ -232,6 +280,11 @@ function SessionItem({ session }: { session: SessionSummary }) {
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          {session.engine === 'batch' ? (
+            <span title="Screening via Gemini Batch — large-pool accelerator">
+              <Badge tone="muted">Batch</Badge>
+            </span>
+          ) : null}
           <Badge tone={STATUS_TONE[session.status] ?? 'muted'}>
             {session.status === 'quota_limited' ? 'quota paused' : session.status}
           </Badge>
@@ -270,6 +323,34 @@ function SessionItem({ session }: { session: SessionSummary }) {
                 ? `Paused at ${session.processed} / ${session.pool_size} — resumes automatically`
                 : `${session.processed} screened${session.failed > 0 ? ` · ${session.failed} failed` : ''}`}
           </p>
+        </div>
+      ) : null}
+
+      {/* Session actions (17 §9.3): retry failed-only / stop in-flight */}
+      {retryable || cancellable ? (
+        <div className="flex flex-wrap gap-2">
+          {retryable ? (
+            <Button
+              size="sm"
+              variant="secondary"
+              loading={actionBusy === 'retry'}
+              disabled={actionBusy !== null}
+              onClick={() => void doRetry()}
+            >
+              {session.failed > 0 ? `Retry ${session.failed} failed` : 'Resume screening'}
+            </Button>
+          ) : null}
+          {cancellable ? (
+            <Button
+              size="sm"
+              variant={confirmCancel ? 'danger' : 'ghost'}
+              loading={actionBusy === 'cancel'}
+              disabled={actionBusy !== null}
+              onClick={() => void doCancel()}
+            >
+              {confirmCancel ? 'Tap again to stop' : 'Stop'}
+            </Button>
+          ) : null}
         </div>
       ) : null}
 
@@ -514,7 +595,7 @@ export function ScreeningDashboard({
         ) : (
           <div className="flex flex-col gap-2">
             {sessions.map((s) => (
-              <SessionItem key={s.id} session={s} />
+              <SessionItem key={s.id} session={s} onChanged={() => void refreshList()} />
             ))}
           </div>
         )}
