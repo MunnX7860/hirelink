@@ -8,10 +8,6 @@
     {
       "path": "/api/cron/org-purge",
       "schedule": "0 4 * * *"
-    },
-    {
-      "path": "/api/cron/screening-worker",
-      "schedule": "* * * * *"
     }
   ]
 }
