@@ -42,6 +42,20 @@ const TYPE_LABELS: Record<QuestionTypeValue, string> = {
   relocate: 'Willing to relocate (Yes/No)',
 }
 
+// Turns the generic "Some fields are invalid." into something actionable by
+// pulling the first couple of per-field Zod messages out of ApiError.details
+// (keyed like "questions.0.rule" — question index is 0-based server-side).
+function describeError(err: ApiError): string {
+  const entries = Object.entries(err.details ?? {})
+  if (entries.length === 0) return err.message
+  const specifics = entries.slice(0, 2).map(([path, messages]) => {
+    const match = /^questions\.(\d+)\./.exec(path)
+    const prefix = match ? `Question ${Number(match[1]) + 1}: ` : ''
+    return `${prefix}${Array.isArray(messages) ? messages[0] : String(messages)}`
+  })
+  return `${err.message} ${specifics.join(' ')}`
+}
+
 const CHOICE_TYPES = new Set<QuestionTypeValue>(['single_choice', 'multiple_choice', 'dropdown'])
 const NUMERIC_TYPES = new Set<QuestionTypeValue>([
   'number',
@@ -53,6 +67,18 @@ const NUMERIC_TYPES = new Set<QuestionTypeValue>([
 interface NumericDraft {
   min: string
   max: string
+}
+
+// The RuleEditor shows a sensible default (e.g. "Qualifies when answered: Yes")
+// for yes_no/education/text before the user has touched the control — this seeds
+// that same default into state the moment a question becomes mandatory, so a
+// user who agrees with the default and never opens the control doesn't silently
+// save with no rule at all (server rejects mandatory questions with no rule).
+function defaultRuleFor(type: QuestionTypeValue): RuleValue | undefined {
+  if (type === 'yes_no' || type === 'relocate') return { op: 'eq', value: true }
+  if (type === 'education') return { op: 'min_level', level: 'bachelors' }
+  if (type === 'text' || type === 'location') return { op: 'not_empty' }
+  return undefined
 }
 
 function defaultQuestion(type: QuestionTypeValue): QuestionValue {
@@ -139,7 +165,7 @@ export function QuestionnaireBuilder({
       toast('Questionnaire saved ✓', { tone: 'success' })
       router.refresh()
     } catch (err) {
-      toast(err instanceof ApiError ? err.message : 'Could not save the questionnaire.', {
+      toast(err instanceof ApiError ? describeError(err) : 'Could not save the questionnaire.', {
         tone: 'danger',
       })
     } finally {
@@ -267,7 +293,9 @@ export function QuestionnaireBuilder({
                         const classification = e.target.value as QuestionClassValue
                         update(index, {
                           classification,
-                          ...(classification === 'mandatory' ? {} : { rule: undefined }),
+                          ...(classification === 'mandatory'
+                            ? { rule: q.rule ?? defaultRuleFor(q.type) }
+                            : { rule: undefined }),
                         })
                       }}
                       disabled={saving}
