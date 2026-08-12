@@ -4,7 +4,9 @@ All significant changes to product, docs, and architecture. Format: `YYYY-MM-DD 
 
 ## [Unreleased]
 
-(nothing yet)
+### Fixed — critical
+
+- **RLS infinite recursion on `organizations`/`organization_members`** (`42P17: infinite recursion detected in policy`) — every query touching either table failed, including the anon-key health check (`/api/health` reported `db:false`). Root cause, in the original `0004_rls_and_triggers.sql` baseline: `organizations_member_read` (on `organizations`) queried `organization_members` directly in its `USING` clause, while `organization_members_org_owner` (on `organization_members`) queried `organizations` directly back — a 2-table RLS evaluation cycle with no security-definer bypass in between. Never caught before now because the project's DB-gated cross-tenant e2e suite self-skips without a live Supabase instance, and this was the first time migrations ran against a real, live project. **`supabase/migrations/0011_fix_org_rls_recursion.sql`** breaks the cycle by routing both checks through `security definer` `plpgsql` helper functions (`current_org_role`, new `is_org_owner`) — `plpgsql` specifically because single-statement `language sql` functions are eligible for planner inlining, which can silently collapse the security-definer boundary and reproduce the same recursion. Verified live: `/api/health` now returns `db:true`.
 
 ## [1.3.0] — Codebase gap-closure pass (2026-08-10)
 
