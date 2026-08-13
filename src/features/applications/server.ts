@@ -16,6 +16,7 @@ import {
   type TimelineEventRow,
 } from '@/features/applications/schemas'
 import { buildResumeFilename, type ValidatedResume } from '@/features/applications/file-validation'
+import type { ScreeningStatusValue } from '@/features/screening/schemas'
 import type { JobRow } from '@/features/jobs/schemas'
 import type {
   BulkUpdateApplicationsInputValue,
@@ -42,6 +43,15 @@ import {
 type Client = SupabaseClient<any>
 
 const UPLOAD_RETRY_DELAY_MS = 5_000 // docs/07 §5: 1 retry, 5s backoff
+
+// docs/07 §4: resumes for jobs with a mandatory questionnaire route into a
+// verdict subfolder under the job folder; jobs with no mandatory questions
+// (verdict null) stay flat, matching the pre-questionnaire layout.
+const VERDICT_FOLDER_LABEL: Record<ScreeningStatusValue, string> = {
+  qualified: 'Qualified',
+  does_not_meet_mandatory: 'Not Qualified',
+  review_required: 'Needs Review',
+}
 
 export interface CreateApplicationResult {
   applicationId: string
@@ -71,6 +81,7 @@ export async function createApplicationForJob(
   input: ApplyInputValue,
   resume: { data: Buffer; originalName: string; validated: ValidatedResume } | null,
   drive: { storage: StorageProvider; integrationId: string } | null,
+  screeningVerdict: ScreeningStatusValue | null,
 ): Promise<CreateApplicationResult> {
   const ownerId = job.owner_id
   const jobOrg = job.organization_id ?? null
@@ -205,7 +216,13 @@ export async function createApplicationForJob(
       logger.warn('resume dropped: no Drive integration', { owner_id: ownerId })
     } else {
       try {
-        const folderId = await ensureJobFolderCached(client, job, drive.storage)
+        const jobFolderId = await ensureJobFolderCached(client, job, drive.storage)
+        // Verdict subfolder only when this job actually has a mandatory questionnaire
+        // (screeningVerdict is null otherwise) — jobs with no questionnaire stay flat.
+        const folderId = screeningVerdict
+          ? (await drive.storage.ensureFolder(VERDICT_FOLDER_LABEL[screeningVerdict], jobFolderId))
+              .folderId
+          : jobFolderId
         const filename = buildResumeFilename({
           applicantName: applicant.full_name,
           applicantId: applicant.id,

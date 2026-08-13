@@ -8,6 +8,7 @@ import { ApplyInput } from '@/features/applications/schemas'
 import { validateResumeFile } from '@/features/applications/file-validation'
 import { createApplicationForJob, getOwnerNotificationPrefs } from '@/features/applications/server'
 import { parseScreeningConfig, validateAnswers, AnswersInput } from '@/features/screening/schemas'
+import { evaluateScreening } from '@/features/screening/engine'
 import { persistAnswersAndVerdict } from '@/features/screening/server'
 import { resolveBrand } from '@/features/orgs/server'
 import { resolveDriveStorage } from '@/lib/integrations/resolve'
@@ -113,6 +114,16 @@ export const POST = handleRoute(async (_ctx, request: Request, ctx: RouteContext
       }
       answersCleaned = validation.cleaned
     }
+    // Computed early (pure, no DB) so the Drive upload below can route into a
+    // Qualified/Not Qualified/Needs Review subfolder — docs/07 §4. Null when the
+    // job has no mandatory questions, in which case the resume stays flat.
+    // persistAnswersAndVerdict (step 6b) re-derives the same verdict when it
+    // writes screening_status — both calls are pure over the same inputs, so
+    // they always agree; kept separate to avoid threading DB state in early.
+    const screeningVerdict = evaluateScreening(
+      screening.questions,
+      answersCleaned as Record<string, boolean | string | number | string[]>,
+    ).status
 
     // 4) form_config enforcement: hidden fields are dropped; required resume must exist (docs/02 §4.2).
     if (job.form_config.phone === 'hidden') input.phone = undefined
@@ -164,6 +175,7 @@ export const POST = handleRoute(async (_ctx, request: Request, ctx: RouteContext
       input,
       resume,
       drive,
+      screeningVerdict,
     )
 
     if (!result.alreadyApplied && input.cover_note) {

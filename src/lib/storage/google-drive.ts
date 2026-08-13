@@ -55,9 +55,27 @@ export class GoogleDriveStorage implements StorageProvider {
     throw new StorageProviderError(msg, { cause: err })
   }
 
-  /** Create (or locate) a child folder by exact name. Drive folders are non-unique; we key off cached ids in the DB. */
+  /**
+   * Create (or locate) a child folder by exact name. Drive folders are non-unique
+   * by name, so callers that don't cache the returned id in the DB (docs/07 §4)
+   * rely on this list-then-create to stay idempotent across repeat calls —
+   * without the list step, every call would mint a fresh duplicate folder.
+   */
   private async ensureChildFolder(name: string, parentId: string): Promise<string> {
     try {
+      const escapedName = name.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+      const existing = await this.drive.files.list(
+        {
+          q: `'${parentId}' in parents and name = '${escapedName}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+          fields: 'files(id)',
+          pageSize: 1,
+          spaces: 'drive',
+        },
+        { timeout: DRIVE_TIMEOUT_MS },
+      )
+      const found = existing.data.files?.[0]?.id
+      if (found) return found
+
       const created = await this.drive.files.create(
         {
           requestBody: {
@@ -79,10 +97,9 @@ export class GoogleDriveStorage implements StorageProvider {
   }
 
   async ensureJobFolder(job: { id: string; title: string }) {
-    const jobsRoot = await this.ensureChildFolder('Jobs', this.rootFolderId)
     const folder = await this.ensureChildFolder(
       `${sanitizeDriveName(job.title)}—${job.id.slice(0, 8)}`,
-      jobsRoot,
+      this.rootFolderId,
     )
     return { folderId: folder }
   }

@@ -19,7 +19,7 @@ export interface StoredFileMetadata {
 }
 
 export interface StorageProvider {
-  /** Lazily create `{root}/Jobs/{Title}—{jobId[:8]}/` (docs/07 §4); safe to call repeatedly. */
+  /** Lazily create `{root}/{Title}—{jobId[:8]}/` (docs/07 §4); safe to call repeatedly. */
   ensureJobFolder(job: { id: string; title: string }): Promise<StoredFolder>
   /**
    * Create (or locate) a NAMED child folder — Drive folder names are non-unique,
