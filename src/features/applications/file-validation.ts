@@ -44,10 +44,17 @@ export function validateResumeFile(buf: Buffer): ValidatedResume {
   return { type, mime, sizeBytes: buf.length }
 }
 
-/** Docs/07 §4 filename shape: {Name}—{applicantId[:8]}—{safe filename}.ext */
+/**
+ * Docs/07 §4 filename shape: {Name}—{safe original filename}.ext
+ *
+ * Deliberately carries no id: readability won over guaranteed uniqueness. Drive
+ * permits duplicate names in one folder, so two DIFFERENT applicants sharing a
+ * name AND an original filename produce two same-named files in the job folder.
+ * That's accepted — the DB (`resumes.storage_file_id`) is the identity, names
+ * are cosmetic, and the authed streaming route resolves by id, never by name.
+ */
 export function buildResumeFilename(input: {
   applicantName: string
-  applicantId: string
   originalName: string
   type: ResumeType
 }): string {
@@ -62,5 +69,5 @@ export function buildResumeFilename(input: {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 40)
-  return `${person}—${input.applicantId.slice(0, 8)}—${safe}.${input.type}`
+  return `${person}—${safe}.${input.type}`
 }

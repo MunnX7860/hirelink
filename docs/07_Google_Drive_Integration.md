@@ -33,7 +33,7 @@ Login (Supabase Auth Google) and Drive use **two different OAuth grants**. Drive
 ```
 {User-chosen Root Folder}/                    ← integrations.config.root_folder_id
 └── {sanitized Job Title}—{job.id first-8}/    e.g. "Barista—4f2a91c3"
-    ├── {sanitized Applicant Name}—{applicant.id first-8}—{safe filename}.pdf   ← no mandatory questionnaire: flat
+    ├── {sanitized Applicant Name}—{safe original filename}.pdf   ← no mandatory questionnaire: flat
     ├── Qualified/            ← screening_status = 'qualified'
     ├── Not Qualified/        ← screening_status = 'does_not_meet_mandatory'
     ├── Needs Review/         ← screening_status = 'review_required' (ambiguous/incomplete answer — NOT a rejection)
@@ -45,6 +45,7 @@ Login (Supabase Auth Google) and Drive use **two different OAuth grants**. Drive
 - **Verdict subfolders** (docs/17 §4–§5): the apply route evaluates the job's deterministic questionnaire verdict (`evaluateScreening`, pure, no DB) before uploading. A job with ≥1 mandatory question routes the resume into `Qualified/`, `Not Qualified/`, or `Needs Review/` under the job folder; a job with no mandatory questions (verdict is always `null`) uploads flat, matching the pre-questionnaire layout. This only reflects the verdict at the moment of apply — a later "Re-run screening" recompute updates `applications.screening_status` in the DB but does NOT move already-uploaded files between folders.
 - `AI Screenings/` created lazily on first completed screening session (`ensureFolder`), cached on `ai_screening_sessions.summary_folder_id` (sibling sessions of the same job reuse the first cached id; the uploaded file id lands on `summary_file_id`). Screening NEVER moves or duplicates resumes.
 - Sanitisation: strip `/\:*?"<>|`, collapse spaces on dots, max 80 chars. Names are cosmetic — IDs are the identity.
+- **Resume filenames carry no applicant id** (`{Name}—{original filename}.ext`) — readability was chosen over guaranteed uniqueness. Drive permits duplicate names within a folder, so two _different_ applicants sharing both a name and an original filename yield two identically-named files in the job folder. Accepted: `resumes.storage_file_id` is the identity and the authed streaming route (§6) resolves by id, never by name.
 - `ensureChildFolder` (the private helper behind both `ensureJobFolder` and `ensureFolder`) does a `files.list` lookup by exact name+parent before creating — Drive folder names are non-unique, so a create-only implementation would mint a fresh duplicate on every call that isn't backed by a DB-cached id (this was a real bug: every new job independently created its own "Jobs/" parent before this list-then-create fix landed).
 
 ## 5. Upload Flow (called from `03 §5`)

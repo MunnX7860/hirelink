@@ -225,7 +225,6 @@ export async function createApplicationForJob(
           : jobFolderId
         const filename = buildResumeFilename({
           applicantName: applicant.full_name,
-          applicantId: applicant.id,
           originalName: resume.originalName,
           type: resume.validated.type,
         })

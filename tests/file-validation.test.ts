@@ -56,14 +56,20 @@ describe('validateResumeFile errors map to docs/05 §2 codes', () => {
 })
 
 describe('buildResumeFilename (docs/07 §4 layout)', () => {
-  it('follows {Name}—{applicantId[:8]}—{file}.format and sanitizes', () => {
+  it('follows {Name}—{file}.format and sanitizes', () => {
     const name = buildResumeFilename({
       applicantName: 'Asha/Verma: Star',
-      applicantId: '12345678-aaaa-bbbb-cccc-000000000000',
       originalName: 'My Resume (final).pdf',
       type: 'pdf',
     })
-    expect(name).toBe('Asha Verma Star—12345678—My Resume (final).pdf')
+    expect(name).toBe('Asha Verma Star—My Resume (final).pdf')
     expect(name).not.toMatch(/[/\\:*?"<>|]/)
+  })
+
+  it('carries no applicant id — same person+file always yields the same name', () => {
+    const args = { applicantName: 'Asha Verma', originalName: 'cv.pdf', type: 'pdf' as const }
+    expect(buildResumeFilename(args)).toBe('Asha Verma—cv.pdf')
+    // Documents the accepted trade-off (07 §4): names are cosmetic, ids are identity.
+    expect(buildResumeFilename(args)).toBe(buildResumeFilename(args))
   })
 })
