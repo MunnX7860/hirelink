@@ -26,6 +26,12 @@ const EnvSchema = z.object({
   GOOGLE_CLIENT_ID: z.string().min(1).optional(),
   GOOGLE_CLIENT_SECRET: z.string().min(1).optional(),
   RESEND_API_KEY: z.string().min(1).optional(),
+  // Gmail SMTP transport (docs/09 §1, alternative to Resend). Requires 2-Step
+  // Verification on the account: the password here is a Google App Password,
+  // NOT the account password. Gmail rewrites the From address to GMAIL_USER
+  // regardless of EMAIL_FROM, so only EMAIL_FROM's display name survives.
+  GMAIL_USER: z.string().email().optional(),
+  GMAIL_APP_PASSWORD: z.string().min(1).optional(),
   EMAIL_FROM: z.string().min(3).default('HireLink <notifications@example.com>'),
   UPSTASH_REDIS_REST_URL: z.string().url().optional(),
   UPSTASH_REDIS_REST_TOKEN: z.string().min(1).optional(),
@@ -60,7 +66,10 @@ export const env: Env = loadEnv()
 /** True when an optional integration is configured; use for feature gating. */
 export const features = {
   googleDriveOAuth: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET),
-  email: Boolean(env.RESEND_API_KEY),
+  /** Gmail SMTP configured — takes precedence over Resend (docs/09 §1). */
+  gmailSmtp: Boolean(env.GMAIL_USER && env.GMAIL_APP_PASSWORD),
+  /** Any real transport available; false → null-transport simulates the send. */
+  email: Boolean(env.RESEND_API_KEY || (env.GMAIL_USER && env.GMAIL_APP_PASSWORD)),
   rateLimit: Boolean(env.UPSTASH_REDIS_REST_URL && env.UPSTASH_REDIS_REST_TOKEN),
   sentry: Boolean(env.SENTRY_DSN),
   cron: Boolean(env.CRON_SECRET),

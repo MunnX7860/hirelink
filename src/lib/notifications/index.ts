@@ -173,6 +173,31 @@ export class Notifications {
     }
   }
 
+  /**
+   * Journals a confirmation email deliberately NOT sent because the candidate
+   * did not qualify (docs/09 §2). Without this the timeline would be silent for
+   * those applicants, making an intentional skip look identical to a delivery
+   * failure. No email is attempted; this only writes the audit record.
+   */
+  async recordApplicantEmailSkipped(e: {
+    reason: 'does_not_meet_mandatory' | 'review_required'
+    applicantId: string
+    applicationId: string
+  }): Promise<void> {
+    try {
+      await this.writeEvent(
+        'email_skipped',
+        { to: 'applicant', template: 'application_received', reason: e.reason },
+        { applicantId: e.applicantId, applicationId: e.applicationId },
+      )
+    } catch (err) {
+      logger.error('recordApplicantEmailSkipped failed', {
+        owner_id: this.ownerId,
+        ...(err instanceof Error ? { error: err.message } : {}),
+      })
+    }
+  }
+
   async alertOwnerResumeFailed(e: ResumeFailedAlert): Promise<void> {
     try {
       const ids = {

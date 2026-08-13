@@ -218,15 +218,30 @@ export const POST = handleRoute(async (_ctx, request: Request, ctx: RouteContext
             applicantId: result.applicantId,
           })
         }
+        // Confirmation emails go to qualified candidates only (docs/09 §2).
+        // `null` = the job has no mandatory questionnaire, so there is no verdict
+        // to gate on and everyone is confirmed as before. A clear fail
+        // (does_not_meet_mandatory) or an ambiguous answer (review_required) is
+        // deliberately NOT emailed — journaled as email_skipped so the timeline
+        // distinguishes "we chose not to" from a delivery failure.
+        const emailEligible = screeningVerdict === null || screeningVerdict === 'qualified'
         if (prefs?.notifyApplicantEmail && !result.alreadyApplied) {
-          await notifications.sendApplicantConfirmation({
-            to: result.applicantEmail,
-            candidateFirstName: firstName(result.applicantName),
-            jobTitle: result.jobTitle,
-            companyLabel,
-            applicantId: result.applicantId,
-            applicationId: result.applicationId,
-          })
+          if (emailEligible) {
+            await notifications.sendApplicantConfirmation({
+              to: result.applicantEmail,
+              candidateFirstName: firstName(result.applicantName),
+              jobTitle: result.jobTitle,
+              companyLabel,
+              applicantId: result.applicantId,
+              applicationId: result.applicationId,
+            })
+          } else {
+            await notifications.recordApplicantEmailSkipped({
+              reason: screeningVerdict,
+              applicantId: result.applicantId,
+              applicationId: result.applicationId,
+            })
+          }
         }
         if (result.resumeFailed && prefs) {
           await notifications.alertOwnerResumeFailed({

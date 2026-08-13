@@ -62,6 +62,26 @@ describe('buildFromHeader (docs/09 §1 — From display name, never the address)
     const address = from.match(/<(.+)>/)?.[1]
     expect(address).toBe('notifications@example.com')
   })
+
+  // Gmail SMTP rewrites the From address to the authenticated account, so the
+  // transport passes GMAIL_USER as an override to keep the header truthful.
+  it('applies an address override while keeping the display-name rules intact', () => {
+    expect(
+      buildFromHeader('HireLink <notifications@example.com>', 'Acme Co', 'owner@gmail.com'),
+    ).toBe('"Acme Co via HireLink" <owner@gmail.com>')
+  })
+
+  it('overrides the address with no fromName, keeping the base display name', () => {
+    expect(
+      buildFromHeader('HireLink <notifications@example.com>', undefined, 'owner@gmail.com'),
+    ).toBe('"HireLink" <owner@gmail.com>')
+  })
+
+  it('returns a bare override address when there is no display name at all', () => {
+    expect(buildFromHeader('notifications@example.com', undefined, 'owner@gmail.com')).toBe(
+      'owner@gmail.com',
+    )
+  })
 })
 
 describe('Drive name sanitiser (docs/07 §4)', () => {

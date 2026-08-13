@@ -10,8 +10,9 @@ export const RESUME_MIME_LABELS: Record<string, string> = {
 }
 
 /**
- * timeline_event_type enum values — docs/04 §3.8 + migration 0001/0005.
+ * timeline_event_type enum values — docs/04 §3.8 + migrations 0001/0005/0007/0012.
  * Zod-free so any bundle can validate display strings.
+ * Keep in sync with the DB enum when a migration adds a value.
  */
 export const TIMELINE_EVENT_TYPES = [
   'application_created',
@@ -23,10 +24,12 @@ export const TIMELINE_EVENT_TYPES = [
   'resume_failed',
   'email_sent',
   'email_failed',
+  'email_skipped',
   'telegram_sent',
   'telegram_failed',
   'ai_summary_generated',
   'applicant_created',
   'application_deleted',
+  'questionnaire_screened',
 ] as const
 export type TimelineEventTypeValue = (typeof TIMELINE_EVENT_TYPES)[number]

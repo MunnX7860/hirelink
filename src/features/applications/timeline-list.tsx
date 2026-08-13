@@ -28,6 +28,14 @@ function describe(event: Pick<TimelineEventRow, 'type' | 'payload'>): string {
   if (event.type === 'email_sent' && (event.payload as { simulated?: boolean }).simulated) {
     return 'Confirmation email simulated (dev mode)'
   }
+  if (event.type === 'email_skipped') {
+    // Why it was skipped matters here: this is a deliberate policy outcome
+    // (docs/09 §2), not a failure, and the owner may want to follow up manually.
+    const reason = (event.payload as { reason?: string }).reason
+    return reason === 'review_required'
+      ? 'Confirmation email not sent — needs review'
+      : 'Confirmation email not sent — did not meet requirements'
+  }
   return LABELS[event.type] ?? event.type
 }
 

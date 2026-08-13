@@ -16,6 +16,7 @@ const nextConfig: NextConfig = {
     'googleapis',
     'google-auth-library',
     'resend',
+    'nodemailer',
     '@react-email/render',
     '@react-email/components',
     '@upstash/redis',
