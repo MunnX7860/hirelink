@@ -32,51 +32,57 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const currentOrg =
     scope.kind === 'org' ? memberships.find((m) => m.org.id === scope.orgId)?.org : undefined
 
+  // Providers wraps the ENTIRE shell, not just <main>. WorkspaceSwitcher (top bar)
+  // and WorkspaceChooserModal both call useToast(), and both mount the moment a
+  // user gains their first membership — with Providers around children only, that
+  // threw "useToast must be used inside <ToastProvider>" and 500'd every
+  // authenticated page immediately after creating an organization. Server-rendered
+  // children pass through the client boundary unchanged, so nothing else moves.
   return (
-    <div className="flex min-h-dvh flex-col">
-      {/* Top bar */}
-      <header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-slate-200 bg-surface px-4">
-        <div className="flex min-w-0 items-center gap-3">
-          <Link href="/dashboard" className="text-lg font-bold tracking-tight text-ink">
-            Hire<span className="text-brand">Link</span>
-          </Link>
-          {memberships.length > 0 ? (
-            <WorkspaceSwitcher
-              current={
-                currentOrg
-                  ? { kind: 'org', orgId: currentOrg.id, name: currentOrg.name }
-                  : { kind: 'personal' }
-              }
-              orgs={memberships.map((m) => ({ id: m.org.id, name: m.org.name, role: m.role }))}
-            />
-          ) : null}
-        </div>
-        <div className="flex items-center gap-2">
-          <span
-            className="flex size-8 items-center justify-center rounded-full bg-brand/10 text-sm font-semibold text-brand"
-            title={displayName}
-            aria-label={`Signed in as ${displayName}`}
-          >
-            {(displayName as string).slice(0, 1).toUpperCase()}
-          </span>
-          <SignOutButton />
-        </div>
-      </header>
+    <Providers>
+      <div className="flex min-h-dvh flex-col">
+        {/* Top bar */}
+        <header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-slate-200 bg-surface px-4">
+          <div className="flex min-w-0 items-center gap-3">
+            <Link href="/dashboard" className="text-lg font-bold tracking-tight text-ink">
+              Hire<span className="text-brand">Link</span>
+            </Link>
+            {memberships.length > 0 ? (
+              <WorkspaceSwitcher
+                current={
+                  currentOrg
+                    ? { kind: 'org', orgId: currentOrg.id, name: currentOrg.name }
+                    : { kind: 'personal' }
+                }
+                orgs={memberships.map((m) => ({ id: m.org.id, name: m.org.name, role: m.role }))}
+              />
+            ) : null}
+          </div>
+          <div className="flex items-center gap-2">
+            <span
+              className="flex size-8 items-center justify-center rounded-full bg-brand/10 text-sm font-semibold text-brand"
+              title={displayName}
+              aria-label={`Signed in as ${displayName}`}
+            >
+              {(displayName as string).slice(0, 1).toUpperCase()}
+            </span>
+            <SignOutButton />
+          </div>
+        </header>
 
-      {/* Content — bottom padding clears the mobile tab bar */}
-      <main className="flex-1 pb-24 lg:pb-8 lg:pl-16">
-        <Providers>{children}</Providers>
-      </main>
+        {/* Content — bottom padding clears the mobile tab bar */}
+        <main className="flex-1 pb-24 lg:pb-8 lg:pl-16">{children}</main>
 
-      {/* Mobile bottom tabs / lg rail (responsive inside) */}
-      <BottomTabs />
+        {/* Mobile bottom tabs / lg rail (responsive inside) */}
+        <BottomTabs />
 
-      {/* One-time workspace chooser — docs/11 §6, docs/02 §10.1 */}
-      {showChooser ? (
-        <WorkspaceChooserModal
-          orgs={memberships.map((m) => ({ id: m.org.id, name: m.org.name, role: m.role }))}
-        />
-      ) : null}
-    </div>
+        {/* One-time workspace chooser — docs/11 §6, docs/02 §10.1 */}
+        {showChooser ? (
+          <WorkspaceChooserModal
+            orgs={memberships.map((m) => ({ id: m.org.id, name: m.org.name, role: m.role }))}
+          />
+        ) : null}
+      </div>
+    </Providers>
   )
 }
