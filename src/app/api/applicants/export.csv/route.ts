@@ -1,7 +1,7 @@
 import { handleRoute } from '@/lib/errors'
 import { csvDocument, csvFilename } from '@/lib/csv'
 import { ListApplicantsQuery } from '@/features/applicants/schemas'
-import { EXPORT_MAX_ROWS, listApplicantsForExport } from '@/features/applicants/server'
+import { listApplicantsForExport } from '@/features/applicants/server'
 import { requireWorkspace } from '@/features/orgs/server'
 
 export const runtime = 'nodejs'
@@ -14,10 +14,14 @@ export const GET = handleRoute(async (_ctx, request: Request) => {
   const { supabase, scope } = await requireWorkspace()
 
   const { searchParams } = new URL(request.url)
-  const q = ListApplicantsQuery.parse({
+  // Only the filter fields are parsed here. `limit` is deliberately NOT passed:
+  // ListApplicantsQuery caps it at 100 (a pagination guard for the list view),
+  // so feeding it EXPORT_MAX_ROWS made every export 400 with
+  // "Number must be less than or equal to 100". listApplicantsForExport applies
+  // EXPORT_MAX_ROWS itself, so the value was discarded even when it did parse.
+  const q = ListApplicantsQuery.omit({ limit: true }).parse({
     q: searchParams.get('q') ?? undefined,
     tag_id: searchParams.get('tag_id') ?? undefined,
-    limit: String(EXPORT_MAX_ROWS),
   })
 
   const rows = await listApplicantsForExport(supabase, scope, { q: q.q, tag_id: q.tag_id })
