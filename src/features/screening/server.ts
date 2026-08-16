@@ -7,7 +7,7 @@ import { logger } from '@/lib/logger'
 import { getJob } from '@/features/jobs/server'
 import { assertCapability } from '@/features/orgs/server'
 import type { Scope } from '@/features/orgs/scope'
-import { isRowInScope } from '@/features/orgs/scope'
+import { applyScope, isRowInScope } from '@/features/orgs/scope'
 import { evaluateScreening } from '@/features/screening/engine'
 import {
   parseScreeningConfig,
@@ -69,6 +69,64 @@ export async function saveScreeningConfig(
   if (error)
     throw new AppError(ErrorCode.INTERNAL, 'Could not save the questionnaire.', { cause: error })
   return config
+}
+
+/** A reusable questionnaire the caller already owns, for the "copy from another job" picker. */
+export interface ReusableQuestionnaire {
+  job_id: string
+  job_title: string
+  questions: QuestionValue[]
+}
+
+/**
+ * Other jobs in scope that already have a questionnaire worth copying.
+ *
+ * Returns full questions (rules included) because the consumer is the OWNER's
+ * builder — 17 §3.4 forbids rules reaching CANDIDATES, not the person who wrote
+ * them. `applyScope` keeps this to the caller's own workspace, so this can never
+ * surface another tenant's rules.
+ *
+ * Capped: this is a convenience picker, not a listing surface, and every row
+ * ships its full rule set to the browser.
+ */
+const REUSABLE_LIMIT = 20
+
+export async function listReusableQuestionnaires(
+  client: Client,
+  scope: Scope,
+  opts: { excludeJobId?: string } = {},
+): Promise<ReusableQuestionnaire[]> {
+  let query = applyScope(
+    client
+      .from('jobs')
+      .select('id, title, screening_config, created_at')
+      .order('created_at', { ascending: false }),
+    scope,
+  )
+  if (opts.excludeJobId) query = query.neq('id', opts.excludeJobId)
+
+  const { data, error } = await query
+  if (error) {
+    // Never block the builder on this — worst case the picker offers templates only.
+    logger.warn('listReusableQuestionnaires failed (picker degrades to templates)', {
+      ...(error.message ? { error: error.message } : {}),
+    })
+    return []
+  }
+
+  const rows = (data ?? []) as Array<{
+    id: string
+    title: string
+    screening_config: unknown
+  }>
+  return rows
+    .map((r) => ({
+      job_id: r.id,
+      job_title: r.title,
+      questions: parseScreeningConfig(r.screening_config).questions,
+    }))
+    .filter((r) => r.questions.length > 0)
+    .slice(0, REUSABLE_LIMIT)
 }
 
 /** Sanitized question projection for candidates (17 §3.4) — used by the page + public route. */

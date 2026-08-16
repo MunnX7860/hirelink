@@ -7,7 +7,14 @@ import { Button } from '@/ui/button'
 import { Input } from '@/ui/input'
 import { Badge } from '@/ui/badge'
 import { useToast } from '@/ui/toaster'
+import { cn } from '@/lib/utils'
 import { ApiError, mutate } from '@/lib/api-client'
+import {
+  QUESTIONNAIRE_TEMPLATES,
+  asDraftQuestions,
+  type QuestionnaireTemplate,
+} from '@/features/screening/templates'
+import type { ReusableQuestionnaire } from '@/features/screening/server'
 import {
   EDUCATION_LEVELS,
   EDUCATION_LABELS,
@@ -55,6 +62,33 @@ function describeError(err: ApiError): string {
   })
   return `${err.message} ${specifics.join(' ')}`
 }
+
+/**
+ * The three classifications in recruiter language. Same underlying values as
+ * docs/17 §3 — only the wording changes. Rendered as one row of buttons rather
+ * than a dropdown so the current choice and its consequence are both visible
+ * without a click.
+ */
+const IMPORTANCE: Array<{ value: QuestionClassValue; label: string; hint: string }> = [
+  {
+    value: 'mandatory',
+    label: 'Must have',
+    hint: 'Decides the result. A wrong answer marks the candidate Not qualified.',
+  },
+  {
+    value: 'preferred',
+    label: 'Nice to have',
+    hint: "Doesn't decide anything on its own. AI screening weighs it when ranking.",
+  },
+  {
+    value: 'informational',
+    label: 'Just asking',
+    hint: 'Collected for your reference only. Never affects the result.',
+  },
+]
+
+/** Types a recruiter reaches for most often; the rest live behind "More types". */
+const COMMON_TYPES: QuestionTypeValue[] = ['yes_no', 'experience_years', 'single_choice', 'text']
 
 const CHOICE_TYPES = new Set<QuestionTypeValue>(['single_choice', 'multiple_choice', 'dropdown'])
 const NUMERIC_TYPES = new Set<QuestionTypeValue>([
@@ -111,20 +145,33 @@ const TEXT_RULE_OPS: Array<{ op: RuleValue['op']; label: string }> = [
 export function QuestionnaireBuilder({
   jobId,
   initialQuestions,
+  reusable = [],
+  showRecompute = true,
 }: {
   jobId: string
   initialQuestions: QuestionValue[]
+  /** Other jobs whose questionnaires can be copied (docs/17 §3). */
+  reusable?: ReusableQuestionnaire[]
+  /**
+   * Off inside the create wizard: a job that was made seconds ago has no
+   * existing applications to recompute, so the control is pure noise there.
+   */
+  showRecompute?: boolean
 }) {
   const router = useRouter()
   const toast = useToast()
   const [questions, setQuestions] = useState<QuestionValue[]>(initialQuestions)
   const [saving, setSaving] = useState(false)
   const [recomputing, setRecomputing] = useState(false)
-  const [addType, setAddType] = useState<QuestionTypeValue>('yes_no')
   const [previewMode, setPreviewMode] = useState(false)
 
   const hasMandatory = questions.some((q) => q.classification === 'mandatory')
   const dirty = JSON.stringify(questions) !== JSON.stringify(initialQuestions)
+  const atLimit = questions.length >= 20
+
+  function addQuestion(type: QuestionTypeValue) {
+    setQuestions((prev) => (prev.length >= 20 ? prev : [...prev, defaultQuestion(type)]))
+  }
 
   function update(index: number, patch: Partial<QuestionValue>) {
     setQuestions((prev) =>
@@ -208,8 +255,8 @@ export function QuestionnaireBuilder({
 
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-ink-secondary">
-          Applicants answer these on the apply page. <strong>Mandatory</strong> questions decide the
-          verdict (qualified / not qualified / needs review) — rules stay hidden from candidates.
+          Candidates answer these when they apply. Answers you mark <strong>Must have</strong>{' '}
+          decide whether they show up as Qualified — candidates never see which ones matter.
         </p>
         <Button
           variant="secondary"
@@ -217,16 +264,14 @@ export function QuestionnaireBuilder({
           onClick={() => setPreviewMode((v) => !v)}
           aria-pressed={previewMode}
         >
-          {previewMode ? '← Back to editor' : 'Preview: Candidate view'}
+          {previewMode ? '← Back to editor' : 'See what candidates see'}
         </Button>
       </div>
 
       {previewMode ? (
         <CandidatePreview questions={questions} />
       ) : questions.length === 0 ? (
-        <p className="mb-3 rounded-lg bg-surface-muted px-3 py-2 text-sm text-ink-secondary">
-          No questions yet — the apply form only asks for resume and contact details.
-        </p>
+        <StartFrom reusable={reusable} disabled={saving} onPick={(qs) => setQuestions(qs)} />
       ) : (
         <ol className="mb-4 flex flex-col gap-3">
           {questions.map((q, index) => (
@@ -274,8 +319,44 @@ export function QuestionnaireBuilder({
                   disabled={saving}
                 />
 
-                <div className="flex flex-wrap items-center gap-3 text-sm text-ink">
-                  <label className="flex items-center gap-1.5">
+                <div className="flex flex-col gap-2">
+                  <span className="text-sm text-ink">How important is this answer?</span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {IMPORTANCE.map((opt) => {
+                      const active = q.classification === opt.value
+                      return (
+                        <button
+                          key={opt.value}
+                          type="button"
+                          disabled={saving}
+                          aria-pressed={active}
+                          title={opt.hint}
+                          onClick={() =>
+                            update(index, {
+                              classification: opt.value,
+                              // Seed the rule the editor already displays, so a
+                              // must-have question is never saved rule-less.
+                              ...(opt.value === 'mandatory'
+                                ? { rule: q.rule ?? defaultRuleFor(q.type) }
+                                : { rule: undefined }),
+                            })
+                          }
+                          className={cn(
+                            'rounded-full border px-3 py-1.5 text-sm transition-colors',
+                            active
+                              ? 'border-brand bg-brand/10 font-semibold text-brand'
+                              : 'border-slate-300 text-ink-secondary hover:bg-surface-muted',
+                          )}
+                        >
+                          {opt.label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <p className="text-xs text-ink-secondary">
+                    {IMPORTANCE.find((o) => o.value === q.classification)?.hint}
+                  </p>
+                  <label className="flex items-center gap-1.5 text-sm text-ink">
                     <input
                       type="checkbox"
                       className="size-4 accent-brand"
@@ -283,28 +364,7 @@ export function QuestionnaireBuilder({
                       onChange={(e) => update(index, { required: e.target.checked })}
                       disabled={saving}
                     />
-                    Required
-                  </label>
-                  <label className="flex items-center gap-1.5">
-                    Affects screening:
-                    <select
-                      value={q.classification}
-                      onChange={(e) => {
-                        const classification = e.target.value as QuestionClassValue
-                        update(index, {
-                          classification,
-                          ...(classification === 'mandatory'
-                            ? { rule: q.rule ?? defaultRuleFor(q.type) }
-                            : { rule: undefined }),
-                        })
-                      }}
-                      disabled={saving}
-                      className="h-9 rounded-lg border border-slate-300 bg-surface px-2 text-sm"
-                    >
-                      <option value="informational">No (informational)</option>
-                      <option value="preferred">AI only (preferred)</option>
-                      <option value="mandatory">Yes (mandatory)</option>
-                    </select>
+                    Candidate must answer this to apply
                   </label>
                 </div>
 
@@ -339,30 +399,44 @@ export function QuestionnaireBuilder({
 
       {!previewMode ? (
         <>
-          <div className="flex flex-wrap items-end gap-2">
-            <label className="flex flex-col gap-1 text-sm text-ink">
-              Add question
-              <select
-                value={addType}
-                onChange={(e) => setAddType(e.target.value as QuestionTypeValue)}
-                disabled={saving}
-                className="h-11 rounded-lg border border-slate-300 bg-surface px-3 text-sm"
-              >
-                {QUESTION_TYPES.map((t) => (
-                  <option key={t} value={t}>
-                    {TYPE_LABELS[t]}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <Button
-              variant="secondary"
-              onClick={() => setQuestions((prev) => [...prev, defaultQuestion(addType)])}
-              disabled={saving || questions.length >= 20}
-            >
-              + Add
-            </Button>
-            <div className="flex-1" />
+          {/* One tap adds a common question type; rarer types stay behind a
+              disclosure so the default view isn't a 12-item taxonomy. */}
+          <div className="flex flex-col gap-2">
+            <span className="text-sm font-medium text-ink">Add a question</span>
+            <div className="flex flex-wrap gap-1.5">
+              {COMMON_TYPES.map((t) => (
+                <Button
+                  key={t}
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => addQuestion(t)}
+                  disabled={saving || atLimit}
+                >
+                  + {TYPE_LABELS[t]}
+                </Button>
+              ))}
+              <details className="relative">
+                <summary className="flex h-9 cursor-pointer list-none items-center rounded-lg border border-slate-300 px-3 text-sm text-ink-secondary hover:bg-surface-muted">
+                  More types
+                </summary>
+                <div className="absolute z-10 mt-1 flex w-60 flex-col rounded-lg border border-slate-200 bg-surface p-1 shadow-lg">
+                  {QUESTION_TYPES.filter((t) => !COMMON_TYPES.includes(t)).map((t) => (
+                    <button
+                      key={t}
+                      type="button"
+                      disabled={saving || atLimit}
+                      onClick={() => addQuestion(t)}
+                      className="rounded-md px-2 py-2 text-left text-sm text-ink hover:bg-surface-muted disabled:text-slate-300"
+                    >
+                      {TYPE_LABELS[t]}
+                    </button>
+                  ))}
+                </div>
+              </details>
+            </div>
+          </div>
+
+          <div className="mt-4 flex items-center justify-end gap-2">
             <Button onClick={save} loading={saving} disabled={!dirty}>
               Save questionnaire
             </Button>
@@ -373,7 +447,7 @@ export function QuestionnaireBuilder({
         </>
       ) : null}
 
-      {hasMandatory && !dirty ? (
+      {showRecompute && hasMandatory && !dirty ? (
         <div className="mt-4 border-t border-slate-200 pt-3">
           <Button variant="secondary" size="sm" onClick={recompute} loading={recomputing}>
             Re-run screening for existing applications
@@ -384,6 +458,79 @@ export function QuestionnaireBuilder({
         </div>
       ) : null}
     </Card>
+  )
+}
+
+// ── Empty state: never a blank builder (docs/17 §3) ──────────────────────────
+
+/**
+ * What the recruiter sees before any question exists. Offering a ready-made set
+ * and a copy-from-another-job shortcut ahead of "start from scratch" means the
+ * common path is one tap, and the blank builder is the deliberate choice rather
+ * than the default.
+ */
+function StartFrom({
+  reusable,
+  disabled,
+  onPick,
+}: {
+  reusable: ReusableQuestionnaire[]
+  disabled: boolean
+  onPick: (questions: QuestionValue[]) => void
+}) {
+  return (
+    <div className="mb-3 flex flex-col gap-3 rounded-xl border border-dashed border-slate-300 bg-surface-muted/40 p-4">
+      <div>
+        <p className="text-sm font-medium text-ink">No questions yet</p>
+        <p className="text-sm text-ink-secondary">
+          Right now the apply form only asks for contact details and a resume. Add questions to sort
+          candidates automatically.
+        </p>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        {QUESTIONNAIRE_TEMPLATES.map((t: QuestionnaireTemplate) => (
+          <button
+            key={t.id}
+            type="button"
+            disabled={disabled}
+            onClick={() => onPick(t.build())}
+            className="rounded-lg border border-slate-300 bg-surface p-3 text-left hover:border-brand hover:bg-brand/5 disabled:opacity-50"
+          >
+            <span className="block text-sm font-semibold text-ink">Use {t.name.toLowerCase()}</span>
+            <span className="block text-xs text-ink-secondary">{t.summary}</span>
+          </button>
+        ))}
+
+        {reusable.length > 0 ? (
+          <details>
+            <summary className="cursor-pointer list-none rounded-lg border border-slate-300 bg-surface p-3 text-sm font-semibold text-ink hover:border-brand hover:bg-brand/5">
+              Copy questions from another job
+            </summary>
+            <div className="mt-1 flex flex-col gap-1">
+              {reusable.map((r) => (
+                <button
+                  key={r.job_id}
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => onPick(asDraftQuestions(r.questions))}
+                  className="rounded-lg px-3 py-2 text-left text-sm text-ink hover:bg-surface-muted disabled:opacity-50"
+                >
+                  {r.job_title}
+                  <span className="ml-1 text-xs text-ink-secondary">
+                    ({r.questions.length} question{r.questions.length === 1 ? '' : 's'})
+                  </span>
+                </button>
+              ))}
+            </div>
+          </details>
+        ) : null}
+      </div>
+
+      <p className="text-xs text-ink-secondary">
+        Or add your own below — you can edit or remove anything a template adds.
+      </p>
+    </div>
   )
 }
 

@@ -16,6 +16,8 @@ import { ShareButton } from '@/ui/share-button'
 import { useToast } from '@/ui/toaster'
 import { api, ApiError } from '@/lib/api-client'
 import { CreateJobInput, type JobRow } from '@/features/jobs/schemas'
+import { QuestionnaireBuilder } from '@/features/screening/questionnaire-builder'
+import type { ReusableQuestionnaire } from '@/features/screening/server'
 
 /**
  * Job form — docs/02 §2 (minimal fields, sane defaults) + success state with the
@@ -30,14 +32,21 @@ export function JobForm({
   job,
   driveConnected,
   aiEnabled,
+  reusable = [],
 }: {
   mode: 'create' | 'edit'
   job?: JobRow | undefined
   driveConnected: boolean
   aiEnabled: boolean
+  /** Create mode only: other jobs whose questionnaires can be copied in step 2. */
+  reusable?: ReusableQuestionnaire[]
 }) {
   const toast = useToast()
-  const [created, setCreated] = useState<{ title: string; url: string } | null>(null)
+  const [created, setCreated] = useState<{ id: string; title: string; url: string } | null>(null)
+  // Screening used to live behind "create the job, then go find Edit" — a detour
+  // most recruiters never took, so jobs shipped with no questionnaire at all.
+  // Step 2 puts it directly in the create path, still skippable.
+  const [step, setStep] = useState<'screening' | 'done'>('screening')
 
   const {
     register,
@@ -69,7 +78,7 @@ export function JobForm({
           method: 'POST',
           body: values,
         })
-        setCreated({ title: createdJob.title, url: createdJob.apply_url })
+        setCreated({ id: createdJob.id, title: createdJob.title, url: createdJob.apply_url })
       } else if (job) {
         await api<JobRow>(`/api/jobs/${job.id}`, { method: 'PATCH', body: values })
         toast('Job updated ✓', { tone: 'success' })
@@ -79,6 +88,39 @@ export function JobForm({
       if (err instanceof ApiError) toast(err.message, { tone: 'danger' })
       else toast('Something went wrong. Please try again.', { tone: 'danger' })
     }
+  }
+
+  // Step 2 — screening. The job already exists at this point, so nothing here
+  // can lose work: skipping just moves on, and the builder saves independently.
+  if (created && step === 'screening') {
+    return (
+      <div className="flex flex-col gap-4">
+        <Card className="flex flex-col gap-1">
+          <p className="text-xs font-medium uppercase tracking-wide text-ink-secondary">
+            Step 2 of 2
+          </p>
+          <h2 className="text-lg font-semibold text-ink">Want to sort applicants automatically?</h2>
+          <p className="text-sm text-ink-secondary">
+            “{created.title}” is created. Add a few questions and candidates get marked Qualified or
+            Not qualified the moment they apply — or skip and do it later.
+          </p>
+        </Card>
+
+        <QuestionnaireBuilder
+          jobId={created.id}
+          initialQuestions={[]}
+          reusable={reusable}
+          showRecompute={false}
+        />
+
+        <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+          <Button variant="secondary" onClick={() => setStep('done')}>
+            Skip for now
+          </Button>
+          <Button onClick={() => setStep('done')}>Done — show my link</Button>
+        </div>
+      </div>
+    )
   }
 
   if (created) {
@@ -109,6 +151,12 @@ export function JobForm({
 
   return (
     <form onSubmit={handleSubmit(submit)} className="flex flex-col gap-4">
+      {mode === 'create' ? (
+        <p className="text-xs font-medium uppercase tracking-wide text-ink-secondary">
+          Step 1 of 2 — the basics
+        </p>
+      ) : null}
+
       {!driveConnected && resumeRule !== 'hidden' ? (
         <Banner tone="warning" title="Google Drive not connected">
           Resumes can’t be stored until you connect Drive in Settings. You can still create the job.

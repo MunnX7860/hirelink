@@ -1,10 +1,16 @@
 import Link from 'next/link'
 import { Card } from '@/ui/card'
 import { StatusPill } from '@/ui/status-pill'
+import { ScreeningPill } from '@/ui/screening-pill'
 import { relativeTime } from '@/lib/time'
 import type { ApplicationListItem } from '@/features/applications/server'
 
-/** Application card — docs/02 §5: name, job, time, contact, status pill, resume flag. */
+/**
+ * Application card — docs/02 §5: name, job, time, contact, status pill, resume flag.
+ * Also carries the screening verdict (17 §2) so the Inbox is scannable: the pipeline
+ * status alone is "new" for everyone, which told the recruiter nothing about whether
+ * the candidate passed the questionnaire without opening each application.
+ */
 export function ApplicationCard({ item }: { item: ApplicationListItem }) {
   return (
     <Link
@@ -17,7 +23,10 @@ export function ApplicationCard({ item }: { item: ApplicationListItem }) {
             <p className="truncate text-base font-semibold text-ink">{item.applicant.full_name}</p>
             <p className="truncate text-sm text-ink-secondary">{item.job.title}</p>
           </div>
-          <StatusPill status={item.status} />
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+            <ScreeningPill verdict={item.screening_status} />
+            <StatusPill status={item.status} />
+          </div>
         </div>
         <div className="flex items-center justify-between gap-2 text-xs text-ink-secondary">
           <span className="truncate">

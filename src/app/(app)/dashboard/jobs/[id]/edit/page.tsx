@@ -7,6 +7,7 @@ import { resolveWorkspace } from '@/features/orgs/server'
 import { refForScope } from '@/features/orgs/scope'
 import { JobForm } from '@/features/jobs/job-form'
 import { QuestionnaireBuilder } from '@/features/screening/questionnaire-builder'
+import { listReusableQuestionnaires } from '@/features/screening/server'
 import { parseScreeningConfig } from '@/features/screening/schemas'
 
 export const metadata: Metadata = { title: 'Edit job' }
@@ -22,10 +23,11 @@ export default async function EditJobPage({ params }: { params: Promise<{ id: st
 
   const scope = await resolveWorkspace(supabase, user.id)
 
-  const [job, drive, ai] = await Promise.all([
+  const [job, drive, ai, reusable] = await Promise.all([
     getJob(supabase, scope, id),
     getScopedIntegration(supabase, refForScope(scope), 'google_drive'),
     getScopedIntegration(supabase, refForScope(scope), 'ai'),
+    listReusableQuestionnaires(supabase, scope, { excludeJobId: id }),
   ])
   if (!job) notFound()
 
@@ -41,6 +43,7 @@ export default async function EditJobPage({ params }: { params: Promise<{ id: st
       <QuestionnaireBuilder
         jobId={job.id}
         initialQuestions={parseScreeningConfig(job.screening_config).questions}
+        reusable={reusable}
       />
     </div>
   )

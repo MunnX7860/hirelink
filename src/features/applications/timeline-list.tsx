@@ -26,7 +26,10 @@ function describe(event: Pick<TimelineEventRow, 'type' | 'payload'>): string {
     return `Status changed: ${p.from ?? '?'} → ${p.to ?? '?'}`
   }
   if (event.type === 'email_sent' && (event.payload as { simulated?: boolean }).simulated) {
-    return 'Confirmation email simulated (dev mode)'
+    // Says what actually happened. "(dev mode)" read like a deliberate setting,
+    // when the real cause is that no email transport is configured — which is
+    // just as possible in production as locally.
+    return 'Confirmation email not sent — email is not set up yet'
   }
   if (event.type === 'email_skipped') {
     // Why it was skipped matters here: this is a deliberate policy outcome
