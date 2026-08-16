@@ -119,6 +119,21 @@ describe('applications list query (docs/05 §4.3 + 02 §6 filters)', () => {
     expect(v.status).toEqual(['new', 'reviewing'])
     expect(ListApplicationsQuery.safeParse({ status: 'new,nah' }).success).toBe(false)
   })
+
+  it('screening comma-splits through the verdict enum plus the "none" sentinel', () => {
+    const v = ListApplicationsQuery.parse({ screening: 'qualified,does_not_meet_mandatory' })
+    expect(v.screening).toEqual(['qualified', 'does_not_meet_mandatory'])
+    // 'none' is not a screening_status value — it selects the NULL verdict
+    // (jobs with no mandatory questionnaire), which the enum alone can't express.
+    expect(ListApplicationsQuery.parse({ screening: 'none' }).screening).toEqual(['none'])
+    expect(ListApplicationsQuery.parse({ screening: 'qualified,none' }).screening).toEqual([
+      'qualified',
+      'none',
+    ])
+    expect(ListApplicationsQuery.safeParse({ screening: 'qualified,bogus' }).success).toBe(false)
+    // Absent means "no verdict filter", never an empty-set match-nothing.
+    expect(ListApplicationsQuery.parse({}).screening).toBeUndefined()
+  })
 })
 
 describe('search sanitiser + cursor helpers', () => {

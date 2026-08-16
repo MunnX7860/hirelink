@@ -8,17 +8,35 @@ import { IconSearch } from '@/ui/icons'
 import { Select } from '@/ui/select'
 import { cn } from '@/lib/utils'
 import { APPLICATION_STATUSES, type ApplicationStatusValue } from '@/features/applications/schemas'
+import type { ScreeningStatusValue } from '@/features/screening/schemas'
 import type { ApplicationListItem } from '@/features/applications/server'
 import type { TagRow } from '@/features/applicants/schemas'
+
+/** Screening verdict filter value; 'none' = job has no mandatory questionnaire. */
+export type ScreeningFilterValue = ScreeningStatusValue | 'none'
 
 export interface ExplorerFilters {
   q: string
   statuses: Set<ApplicationStatusValue>
+  screening: Set<ScreeningFilterValue>
   jobId: string
   tagId: string
   dateFrom: string
   dateTo: string
 }
+
+/**
+ * Verdict chips, in the same recruiter language as ScreeningPill. Rendered as a
+ * separate row from the status chips because they answer a different question:
+ * status is where the candidate is in YOUR pipeline, screening is what the
+ * questionnaire decided. Mixing them into one row implied they were alternatives.
+ */
+const SCREENING_FILTERS: Array<{ value: ScreeningFilterValue; label: string }> = [
+  { value: 'qualified', label: 'Qualified' },
+  { value: 'review_required', label: 'Needs review' },
+  { value: 'does_not_meet_mandatory', label: 'Not qualified' },
+  { value: 'none', label: 'No questionnaire' },
+]
 
 /**
  * ApplicationExplorer — Inbox/filtered applications list (docs/02 §5–6).
@@ -45,6 +63,7 @@ export function ApplicationExplorer({
   const [filters, setFilters] = useState<ExplorerFilters>({
     q: '',
     statuses: new Set<ApplicationStatusValue>(),
+    screening: new Set<ScreeningFilterValue>(),
     jobId: fixedJobId ?? '',
     tagId: '',
     dateFrom: '',
@@ -62,6 +81,7 @@ export function ApplicationExplorer({
       if (f.jobId) p.set('job_id', f.jobId)
       if (f.statuses.size > 0) p.set('status', [...f.statuses].join(','))
       else if (!inboxDefault) p.set('status', APPLICATION_STATUSES.join(','))
+      if (f.screening.size > 0) p.set('screening', [...f.screening].join(','))
       if (f.q.trim()) p.set('q', f.q.trim())
       if (f.tagId) p.set('tag_id', f.tagId)
       if (f.dateFrom) p.set('date_from', f.dateFrom)
@@ -129,6 +149,15 @@ export function ApplicationExplorer({
     })
   }
 
+  function toggleScreening(s: ScreeningFilterValue) {
+    setFilters((f) => {
+      const screening = new Set(f.screening)
+      if (screening.has(s)) screening.delete(s)
+      else screening.add(s)
+      return { ...f, screening }
+    })
+  }
+
   return (
     <div className="flex flex-col gap-3">
       {/* Search + filter toggle */}
@@ -170,6 +199,33 @@ export function ApplicationExplorer({
         >
           {selecting ? 'Done' : 'Select'}
         </button>
+      </div>
+
+      {/* Screening verdict chips (multi) — 17 §2 */}
+      <div
+        className="flex gap-2 overflow-x-auto pb-1"
+        role="group"
+        aria-label="Screening result filter"
+      >
+        {SCREENING_FILTERS.map((s) => {
+          const active = filters.screening.has(s.value)
+          return (
+            <button
+              key={s.value}
+              type="button"
+              aria-pressed={active}
+              onClick={() => toggleScreening(s.value)}
+              className={cn(
+                'shrink-0 rounded-full border px-3 py-1.5 text-xs font-semibold uppercase tracking-wide',
+                active
+                  ? 'border-brand bg-brand/10 text-brand'
+                  : 'border-slate-300 text-ink-secondary',
+              )}
+            >
+              {s.label}
+            </button>
+          )
+        })}
       </div>
 
       {/* Status chips (multi) */}

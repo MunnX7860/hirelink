@@ -375,6 +375,20 @@ export async function listApplications(
   if (tagApplicantIds) query = query.in('applicant_id', tagApplicantIds)
   if (q.status && q.status.length > 0) query = query.in('status', q.status)
   else query = query.eq('status', 'new')
+  if (q.screening && q.screening.length > 0) {
+    // 'none' = NULL verdict (job has no mandatory questionnaire). PostgREST needs
+    // that expressed as `is.null` rather than an `in` member, so a selection
+    // mixing 'none' with real verdicts becomes an OR of the two forms.
+    const verdicts = q.screening.filter((s) => s !== 'none')
+    const includeNone = q.screening.includes('none')
+    if (includeNone && verdicts.length > 0) {
+      query = query.or(`screening_status.is.null,screening_status.in.(${verdicts.join(',')})`)
+    } else if (includeNone) {
+      query = query.is('screening_status', null)
+    } else {
+      query = query.in('screening_status', verdicts)
+    }
+  }
   const term = q.q ? sanitizeSearchTerm(q.q) : ''
   if (term) {
     // Full-text over applicant name/email (04 §4 trigram index), docs/05 §4.3.

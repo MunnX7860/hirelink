@@ -1,4 +1,6 @@
 import { z } from 'zod'
+// One-way dependency: screening/schemas imports nothing from here.
+import { ScreeningStatus } from '@/features/screening/schemas'
 
 /** Application schemas — docs/05 §4.2–4.3 + §5. Shared client/server. */
 
@@ -78,6 +80,14 @@ export const ListApplicationsQuery = z.object({
     .optional(),
   q: z.string().max(120).optional(),
   tag_id: z.string().uuid().optional(),
+  // Screening verdict filter (17 §2). Comma-separated like `status`. The literal
+  // 'none' matches applications with a NULL verdict — jobs without a mandatory
+  // questionnaire — which a plain enum list could not express.
+  screening: z
+    .string()
+    .transform((s) => s.split(','))
+    .pipe(z.array(z.union([ScreeningStatus, z.literal('none')])))
+    .optional(),
   date_from: IsoDate.optional(), // docs/05 §4.3 + 02 §6: applied_at range filters
   date_to: IsoDate.optional(),
   cursor: z.string().optional(),

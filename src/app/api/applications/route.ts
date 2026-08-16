@@ -15,6 +15,7 @@ export const GET = handleRoute(async (_ctx, request: Request) => {
     status: searchParams.get('status') ?? undefined,
     q: searchParams.get('q') ?? undefined,
     tag_id: searchParams.get('tag_id') ?? undefined,
+    screening: searchParams.get('screening') ?? undefined,
     date_from: searchParams.get('date_from') ?? undefined,
     date_to: searchParams.get('date_to') ?? undefined,
     cursor: searchParams.get('cursor') ?? undefined,
