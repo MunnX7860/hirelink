@@ -10,7 +10,11 @@ import {
   buildResumeFailedMessage,
   sendTelegramMessage,
 } from '@/lib/notifications/telegram'
-import { resolveTelegram, markIntegrationError } from '@/lib/integrations/resolve'
+import {
+  resolveTelegram,
+  resolveGmailSender,
+  markIntegrationError,
+} from '@/lib/integrations/resolve'
 import type {
   ApplicantConfirmation,
   NewApplicationEvent,
@@ -57,6 +61,28 @@ export class Notifications {
       type,
       payload,
     })
+  }
+
+  /**
+   * The workspace's connected Gmail, if any (docs/09 §1). Resolved per send
+   * rather than cached on the instance: a `Notifications` object can outlive a
+   * disconnect inside a long `after()` block, and sending from a revoked grant
+   * would fail noisily instead of quietly falling back to the platform sender.
+   */
+  private async gmailSender() {
+    try {
+      return await resolveGmailSender(this.client, {
+        ownerId: this.ownerId,
+        orgId: this.opts.orgId ?? null,
+      })
+    } catch (err) {
+      // Never let sender resolution sink a send — degrade to the platform transport.
+      logger.error('gmail sender resolution failed (falling back)', {
+        owner_id: this.ownerId,
+        ...(err instanceof Error ? { error: err.message } : {}),
+      })
+      return null
+    }
   }
 
   private async telegram(
@@ -137,6 +163,7 @@ export class Notifications {
         jobTitle: e.jobTitle,
         companyLabel: e.companyLabel,
       })
+      const sender = await this.gmailSender()
       const send = async () =>
         sendEmail({
           to: e.to,
@@ -145,11 +172,22 @@ export class Notifications {
           text: rendered.text,
           fromName: e.companyLabel,
           template: 'application_received',
+          sender,
         })
       let result = await send()
       if (!result.ok && result.retryable) {
         await new Promise((r) => setTimeout(r, RETRY_DELAY_MS))
         result = await send()
+      }
+      // A revoked Gmail grant is the owner's to fix — flag it so Settings shows
+      // the reconnect banner instead of silently dropping every future email.
+      if (!result.ok && result.integrationBroken && sender) {
+        await markIntegrationError(this.client, sender.integrationId).catch((err) => {
+          logger.error('markIntegrationError (gmail) failed', {
+            integration_id: sender.integrationId,
+            ...(err instanceof Error ? { error: err.message } : {}),
+          })
+        })
       }
       await this.writeEvent(
         result.ok ? 'email_sent' : 'email_failed',

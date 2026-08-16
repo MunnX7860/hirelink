@@ -7,6 +7,7 @@ import { Card, CardHeader, CardTitle } from '@/ui/card'
 import { Button } from '@/ui/button'
 import { Input } from '@/ui/input'
 import { Badge } from '@/ui/badge'
+import { Banner } from '@/ui/banner'
 import { ConfirmModal } from '@/ui/modal'
 import { useToast } from '@/ui/toaster'
 import { api, ApiError, mutate } from '@/lib/api-client'
@@ -29,6 +30,12 @@ interface TelegramState {
   botUsername: string | null
   shared: boolean
 }
+/** A connected Gmail sender (docs/09 §1) — optional; the platform sender is the default. */
+interface GmailState {
+  status: 'active' | 'error'
+  level: 'org' | 'personal'
+  address: string
+}
 
 /**
  * Phase 4 (docs/11 §3): integrations resolve with workspace precedence — the org
@@ -45,6 +52,7 @@ export interface IntegrationsWorkspace {
 export function IntegrationsSettings({
   drive,
   telegram,
+  gmail = null,
   emailConfigured,
   driveOAuthConfigured,
   ai,
@@ -53,6 +61,7 @@ export function IntegrationsSettings({
 }: {
   drive: DriveState | null
   telegram: TelegramState | null
+  gmail?: GmailState | null
   emailConfigured: boolean
   driveOAuthConfigured: boolean
   ai: AiState | null
@@ -96,17 +105,23 @@ export function IntegrationsSettings({
       <Card>
         <CardHeader>
           <CardTitle>Email</CardTitle>
-          <Badge tone={emailConfigured ? 'success' : 'muted'}>
-            {emailConfigured ? 'configured' : 'simulated (dev)'}
-          </Badge>
+          {gmail ? (
+            <>
+              <Badge tone={gmail.status === 'active' ? 'success' : 'warning'}>{gmail.status}</Badge>
+              <LevelBadge level={gmail.level} />
+            </>
+          ) : (
+            <Badge tone={emailConfigured ? 'success' : 'muted'}>
+              {emailConfigured ? 'platform sender' : 'not sending'}
+            </Badge>
+          )}
         </CardHeader>
-        <p className="text-sm text-ink-secondary">
-          Transactional emails (application confirmations, alerts) are sent via the platform’s
-          Resend account — nothing to connect here.{' '}
-          {emailConfigured
-            ? 'Live delivery is enabled.'
-            : 'This deployment has no RESEND_API_KEY, so emails are rendered and logged instead (dev mode).'}
-        </p>
+        <GmailSection
+          gmail={gmail}
+          emailConfigured={emailConfigured}
+          oauthConfigured={driveOAuthConfigured}
+          workspace={workspace}
+        />
       </Card>
 
       <AiKeySection
@@ -140,6 +155,134 @@ function readOnlyReason(
   if (level === 'personal')
     return 'This is your personal connection — switch to the Personal workspace to manage it.'
   return null
+}
+
+// ── Gmail sender (docs/09 §1) ─────────────────────────────────────────────────
+
+/**
+ * Optional per-workspace sending identity. The platform sender always works, so
+ * this section leads with what already happens and frames Gmail as an upgrade —
+ * a recruiter who ignores it still gets working email, which is the whole point
+ * of keeping the platform default.
+ */
+function GmailSection({
+  gmail,
+  emailConfigured,
+  oauthConfigured,
+  workspace,
+}: {
+  gmail: GmailState | null
+  emailConfigured: boolean
+  oauthConfigured: boolean
+  workspace: IntegrationsWorkspace
+}) {
+  const toast = useToast()
+  const router = useRouter()
+  const queryClient = useQueryClient()
+  const [busy, setBusy] = useState(false)
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false)
+
+  const reason = readOnlyReason(workspace, gmail?.level)
+
+  async function connect() {
+    setBusy(true)
+    try {
+      const { url } = await api<{ url: string }>('/api/integrations/gmail/start', {
+        method: 'POST',
+        ...(workspace.kind === 'org' && workspace.orgId
+          ? { body: { org_id: workspace.orgId } }
+          : {}),
+      })
+      window.location.assign(url)
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : 'Could not start the connection.', {
+        tone: 'danger',
+      })
+      setBusy(false)
+    }
+  }
+
+  async function disconnect() {
+    setBusy(true)
+    try {
+      await mutate('/api/integrations/email', 'DELETE')
+      toast('Gmail disconnected — sending falls back to the platform address', { tone: 'info' })
+      queryClient.invalidateQueries({ queryKey: ['integrations'] })
+      router.refresh()
+    } catch {
+      toast('Could not disconnect.', { tone: 'danger' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const platformLine = emailConfigured
+    ? 'Right now candidate emails come from the platform address, showing your name as the sender.'
+    : 'This deployment has no email transport configured, so confirmations are logged instead of sent.'
+
+  if (reason) {
+    return (
+      <div className="flex flex-col gap-2">
+        <p className="text-sm text-ink-secondary">
+          {gmail ? `Sending as ${gmail.address}.` : platformLine}
+        </p>
+        <p className="text-xs text-ink-secondary">{reason}</p>
+      </div>
+    )
+  }
+
+  if (!gmail) {
+    return (
+      <div className="flex flex-col gap-3">
+        <p className="text-sm text-ink-secondary">
+          {platformLine} You can send from{' '}
+          <strong>{workspace.kind === 'org' ? 'the organization’s' : 'your own'}</strong> Gmail
+          instead — candidates then see your real address. Google asks permission to send only; the
+          app can never read your mail, and you can revoke it any time.
+        </p>
+        {oauthConfigured ? (
+          <Button onClick={connect} loading={busy} className="self-start">
+            Connect Gmail
+          </Button>
+        ) : (
+          <Banner tone="warning" title="Google sign-in not configured">
+            This deployment is missing GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET.
+          </Banner>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      {gmail.status === 'error' ? (
+        <Banner tone="warning" title="Gmail needs reconnecting">
+          Google rejected the last send — the permission was most likely revoked. Emails are falling
+          back to the platform address until you reconnect.
+        </Banner>
+      ) : null}
+      <p className="text-sm text-ink-secondary">
+        Candidate emails are sent from <strong>{gmail.address}</strong>.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <Button variant="secondary" onClick={connect} loading={busy}>
+          {gmail.status === 'active' ? 'Reconnect' : 'Reconnect Gmail'}
+        </Button>
+        <Button variant="ghost" className="text-danger" onClick={() => setConfirmDisconnect(true)}>
+          Disconnect
+        </Button>
+      </div>
+      <ConfirmModal
+        open={confirmDisconnect}
+        onOpenChange={setConfirmDisconnect}
+        title="Disconnect Gmail?"
+        description="Candidate emails go back to the platform address. Nothing already sent is affected."
+        confirmLabel="Disconnect"
+        loading={busy}
+        onConfirm={disconnect}
+      />
+    </div>
+  )
 }
 
 // ── Drive ─────────────────────────────────────────────────────────────────────

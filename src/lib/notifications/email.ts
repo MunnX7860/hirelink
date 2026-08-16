@@ -2,6 +2,8 @@ import 'server-only'
 
 import { Resend } from 'resend'
 import nodemailer from 'nodemailer'
+import type { OAuth2Client } from 'google-auth-library'
+import { sendViaGmailApi } from '@/lib/notifications/gmail'
 import type { DeliveryResult } from '@/lib/notifications/types'
 import { env, features } from '@/lib/env'
 import { logger } from '@/lib/logger'
@@ -95,7 +97,27 @@ export async function sendEmail(input: {
   /** Applicant-facing brand name, rendered as "{fromName} via {base}". Omit for owner-facing system alerts. */
   fromName?: string
   template: string
+  /**
+   * A workspace's own connected Gmail (docs/09 §1). Highest precedence: the
+   * recruiter explicitly chose to send as themselves, so it outranks both the
+   * platform SMTP account and Resend. Resolved per-send by the caller, which is
+   * the only layer that knows the owner/org.
+   */
+  sender?: { oauth2: OAuth2Client; address: string } | null
 }): Promise<DeliveryResult & { simulated?: boolean; messageId?: string }> {
+  if (input.sender) {
+    return sendViaGmailApi({
+      oauth2: input.sender.oauth2,
+      // Gmail rewrites the address to the authenticated account regardless, so
+      // the override keeps the header honest — same reasoning as the SMTP path.
+      from: buildFromHeader(env.EMAIL_FROM, input.fromName, input.sender.address),
+      to: input.to,
+      subject: input.subject,
+      html: input.html,
+      text: input.text,
+    })
+  }
+
   if (!features.email) {
     logger.info('email simulated (no GMAIL_USER/GMAIL_APP_PASSWORD or RESEND_API_KEY)', {
       template: input.template,

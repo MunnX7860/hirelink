@@ -161,12 +161,23 @@ export async function resolveDriveStorage(
   }
 }
 
+/**
+ * Google OAuth redirect targets. Drive and Gmail share one Cloud client but need
+ * separate callbacks (different scopes, different integration rows), and Google
+ * matches the redirect_uri exactly — so BOTH must be registered in the console.
+ */
+export const GOOGLE_REDIRECT_PATHS = {
+  drive: '/api/integrations/google/callback',
+  gmail: '/api/integrations/gmail/callback',
+} as const
+export type GoogleOAuthPurpose = keyof typeof GOOGLE_REDIRECT_PATHS
+
 /** Raw OAuth2 client holder (for refresh persistence — docs/07 §3.3). */
-export function buildGoogleOAuthClient(): OAuth2Client {
+export function buildGoogleOAuthClient(purpose: GoogleOAuthPurpose = 'drive'): OAuth2Client {
   return new OAuth2Client(
     env.GOOGLE_CLIENT_ID,
     env.GOOGLE_CLIENT_SECRET,
-    `${env.NEXT_PUBLIC_APP_URL}/api/integrations/google/callback`,
+    `${env.NEXT_PUBLIC_APP_URL}${GOOGLE_REDIRECT_PATHS[purpose]}`,
   )
 }
 
@@ -211,7 +222,7 @@ export function driveOAuthClientFor(client: Client, row: IntegrationRow): OAuth2
   if (!row.credentials_encrypted) {
     throw new Error('driveOAuthClientFor: integration row has no stored credentials')
   }
-  const oauth2 = buildGoogleOAuthClient()
+  const oauth2 = buildGoogleOAuthClient('drive')
   const credentials = JSON.parse(decryptSecret(row.credentials_encrypted)) as Record<
     string,
     unknown
@@ -219,4 +230,37 @@ export function driveOAuthClientFor(client: Client, row: IntegrationRow): OAuth2
   oauth2.setCredentials(credentials)
   attachTokenPersistence(oauth2, client, row.id, credentials)
   return oauth2
+}
+
+/**
+ * A workspace's connected Gmail sender, or null when none is connected.
+ *
+ * Stored on the previously-unused `integration_type = 'email'` row, so no
+ * migration was needed. Org row wins over personal (docs/11 §3), matching every
+ * other integration: a team's shared sending identity should not depend on which
+ * member happens to trigger the send.
+ */
+export async function resolveGmailSender(
+  client: Client,
+  ref: IntegrationRef,
+): Promise<{ integrationId: string; oauth2: OAuth2Client; address: string } | null> {
+  const resolved = await getScopedIntegration(client, ref, 'email')
+  if (!resolved || resolved.row.status !== 'active' || !resolved.row.credentials_encrypted) {
+    return null
+  }
+  if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) return null
+
+  const address = String((resolved.row.config as { address?: string }).address ?? '')
+  // Without the address we cannot build a truthful From header — Gmail would
+  // rewrite it anyway, so a row missing it is treated as not connected.
+  if (!address) return null
+
+  const oauth2 = buildGoogleOAuthClient('gmail')
+  const credentials = JSON.parse(decryptSecret(resolved.row.credentials_encrypted)) as Record<
+    string,
+    unknown
+  >
+  oauth2.setCredentials(credentials)
+  attachTokenPersistence(oauth2, client, resolved.row.id, credentials)
+  return { integrationId: resolved.row.id, oauth2, address }
 }

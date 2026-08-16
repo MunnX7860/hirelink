@@ -12,7 +12,26 @@
 | Sending   | `lib/notifications/email.ts` behind `NotificationService.sendApplicantConfirmation` etc.                                  |
 | Env-gate  | Neither configured (local dev) → `null`-transport: render + log, mark `email_sent` event with `"simulated": true`         |
 
-**Transport precedence** is resolved per-send in `sendEmail()`: Gmail SMTP wins when both are set. Only one need be configured; `features.email` is true if either is.
+**Transport precedence** is resolved per-send in `sendEmail()`:
+
+1. **A workspace's connected Gmail** (`integrations` row, `type = 'email'`) — see §1.1. Highest, because the recruiter explicitly chose to send as themselves.
+2. **Gmail SMTP** (`GMAIL_USER` + `GMAIL_APP_PASSWORD`) — one platform-wide account.
+3. **Resend** (`RESEND_API_KEY`) — the platform sender, and the right default at scale.
+4. **Null transport** — render + log, `email_sent` with `"simulated": true`.
+
+Only one of 2/3 need be configured; `features.email` is true if either is. Layer 1 is per-workspace and independent of both.
+
+### 1.1 Connected Gmail (per workspace)
+
+A recruiter can send from their own mailbox without ever sharing a credential: `POST /api/integrations/gmail/start` → Google consent → `/api/integrations/gmail/callback` stores an encrypted refresh token. Mirrors the Drive grant (docs/07 §2/§3) exactly — same Cloud client, same `encryptSecret` format, same one-time signed-state nonce, same org-precedence rule (docs/11 §3).
+
+- **Scope is `gmail.send` only**, plus `openid email`. `gmail.send` is a **sensitive** scope, so it needs OAuth verification but _not_ the annual paid CASA assessment that restricted Gmail scopes (readonly/modify/compose, full mailbox) drag in. The narrow scope is what keeps it that way — do not widen it.
+- `openid email` exists solely so the callback can read the granted address from the `id_token`; `gmail.send` alone cannot call `users.getProfile`. An unverified or missing email fails the connection rather than storing a sender that can't build a truthful From header.
+- **Both redirect URIs must be registered** in Google Cloud Console — Google matches `redirect_uri` exactly, and Drive and Gmail use different callbacks (`GOOGLE_REDIRECT_PATHS` in `lib/integrations/resolve.ts`).
+- Stored on the previously-unused `integration_type = 'email'` value, so no migration was needed.
+- The transport assembles raw RFC 5322 itself (unlike Resend/nodemailer, which take structured fields), which makes header assembly injection-sensitive: every interpolated header goes through `sanitizeHeader` to strip CR/LF, covered by `tests/gmail-transport.test.ts`.
+- A revoked grant returns `integrationBroken`, flipping the row to `status: 'error'` so Settings shows a reconnect banner; sends fall back to the platform transport meanwhile.
+- Per-account send caps still apply (500/day consumer, 2,000 Workspace), and there are no bounce webhooks on this path.
 
 **Gmail SMTP** (`smtp.gmail.com:465`, `nodemailer`): the password is a Google **App Password**, which requires 2-Step Verification on the account — never the account password. Caveats that shaped the implementation:
 

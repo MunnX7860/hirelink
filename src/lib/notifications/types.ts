@@ -5,7 +5,15 @@ import 'server-only'
  * D4: delivery is best-effort; results are unions, no throws across the seam.
  */
 
-export type DeliveryResult = { ok: true } | { ok: false; code: string; retryable: boolean }
+export type DeliveryResult =
+  | { ok: true }
+  | {
+      ok: false
+      code: string
+      retryable: boolean
+      /** Credential is dead (revoked grant) — caller flips the row to 'error' (docs/02 §8.1). */
+      integrationBroken?: boolean
+    }
 
 export interface NewApplicationEvent {
   jobTitle: string

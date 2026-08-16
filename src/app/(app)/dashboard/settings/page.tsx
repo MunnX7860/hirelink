@@ -36,7 +36,7 @@ export default async function SettingsPage({
   const ref = refForScope(scope)
   const params = await searchParams
 
-  const [profileRes, memberships, drive, telegram, ai] = await Promise.all([
+  const [profileRes, memberships, drive, telegram, ai, gmail] = await Promise.all([
     supabase
       .from('users')
       .select('email, full_name, notify_telegram, notify_applicant_email')
@@ -46,6 +46,9 @@ export default async function SettingsPage({
     getScopedIntegration(supabase, ref, 'google_drive'),
     getScopedIntegration(supabase, ref, 'telegram'),
     getScopedIntegration(supabase, ref, 'ai'),
+    // Optional per-workspace sending identity (docs/09 §1) — stored on the
+    // 'email' integration type; absent means the platform sender is used.
+    getScopedIntegration(supabase, ref, 'email'),
   ])
   const profile = profileRes.data
 
@@ -56,6 +59,7 @@ export default async function SettingsPage({
   const canManageIntegrations = scope.kind === 'org' ? can(scope.role, 'integrations.manage') : true
 
   const driveError = typeof params.drive_error === 'string' ? params.drive_error : null
+  const gmailError = typeof params.gmail_error === 'string' ? params.gmail_error : null
   const connected = typeof params.connected === 'string' ? params.connected : null
 
   return (
@@ -77,6 +81,26 @@ export default async function SettingsPage({
             session: 'You were signed out mid-flow — try again.',
             org: "That organization connection isn't allowed for your role.",
           }[driveError] ?? 'Please try connecting again.'}
+        </Banner>
+      ) : null}
+
+      {connected === 'gmail' ? (
+        <Banner tone="success" title="Gmail connected ✅">
+          Candidate emails will now be sent from your Gmail address.
+        </Banner>
+      ) : null}
+      {gmailError ? (
+        <Banner tone="danger" title="Gmail connection failed">
+          {{
+            oauth: 'Google sign-in was cancelled.',
+            state: 'The secure handshake expired — try again.',
+            no_refresh_token: 'Google did not return offline access — try again.',
+            no_address:
+              'Google did not confirm a verified email address for that account — try a different one.',
+            exchange: 'The connection handshake failed — try again.',
+            session: 'You were signed out mid-flow — try again.',
+            org: "That organization connection isn't allowed for your role.",
+          }[gmailError] ?? 'Please try connecting again.'}
         </Banner>
       ) : null}
 
@@ -155,6 +179,15 @@ export default async function SettingsPage({
                 rootFolderSet: Boolean(
                   (drive.row.config as { root_folder_id?: string }).root_folder_id,
                 ),
+              }
+            : null
+        }
+        gmail={
+          gmail && gmail.row.status !== 'disconnected'
+            ? {
+                status: gmail.row.status,
+                level: gmail.level,
+                address: String((gmail.row.config as { address?: string }).address ?? ''),
               }
             : null
         }
